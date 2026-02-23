@@ -124,7 +124,7 @@ const ContentInput = ({
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       {/* Header row */}
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-5">
         <h3 className="text-base font-semibold">
           {inputMode === "text" ? "Content to Analyze" : "Article URL"}
         </h3>
