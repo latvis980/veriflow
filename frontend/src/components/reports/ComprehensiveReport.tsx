@@ -7,7 +7,7 @@ import DeceptionReport from "./DeceptionReport";
 import ManipulationReport from "./ManipulationReport";
 import LLMOutputReport from "./LLMOutputReport";
 import { useState, useMemo } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, Check } from "lucide-react";
 
 type Props = {
   data: {
@@ -67,7 +67,43 @@ const ComprehensiveReport = ({ data }: Props) => {
   const score = synth?.overall_score ?? synth?.overall_credibility_score ?? 0;
   const rating = synth?.overall_rating ?? synth?.overall_credibility_rating;
 
-  const toggleMode = (mode: string) => {
+  const [copied, setCopied] = useState(false);
+
+  const copyAssessment = () => {
+    if (!synth) return;
+    const lines: string[] = [];
+
+    lines.push(`OVERALL ASSESSMENT`);
+    lines.push(`Score: ${score}/100 -- ${rating || getScoreLabel(score)}`);
+    if (synth.confidence != null) lines.push(`Confidence: ${Math.round(synth.confidence)}%`);
+    lines.push("");
+
+    if (synth.summary) lines.push(synth.summary, "");
+
+    if (synth.key_concerns?.length) {
+      lines.push("KEY CONCERNS");
+      synth.key_concerns.forEach(c => lines.push(`- ${c}`));
+      lines.push("");
+    }
+
+    if (synth.positive_indicators?.length) {
+      lines.push("POSITIVE INDICATORS");
+      synth.positive_indicators.forEach(p => lines.push(`- ${p}`));
+      lines.push("");
+    }
+
+    if (synth.recommendations?.length) {
+      lines.push("RECOMMENDATIONS");
+      synth.recommendations.forEach((r, i) => lines.push(`${i + 1}. ${r}`));
+    }
+
+    navigator.clipboard.writeText(lines.join("\n")).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+
     setExpandedModes(prev => ({ ...prev, [mode]: !prev[mode] }));
   };
 
@@ -165,7 +201,17 @@ const ComprehensiveReport = ({ data }: Props) => {
       {/* Synthesis / Overall Assessment */}
       {synth && (
         <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-xl font-display font-semibold mb-3">Overall Assessment</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xl font-display font-semibold">Overall Assessment</h3>
+            <button
+              onClick={copyAssessment}
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              title="Copy overall assessment"
+            >
+              {copied ? <Check size={13} /> : <Copy size={13} />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
 
           <div className="flex items-center gap-4 mb-4">
             <ScoreBadge score={score} label={rating || getScoreLabel(score)} />
