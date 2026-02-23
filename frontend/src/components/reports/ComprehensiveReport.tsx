@@ -103,7 +103,7 @@ const ComprehensiveReport = ({ data }: Props) => {
     });
   };
 
-
+  const toggleMode = (mode: string) => {
     setExpandedModes(prev => ({ ...prev, [mode]: !prev[mode] }));
   };
 
