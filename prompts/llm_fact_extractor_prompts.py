@@ -13,7 +13,7 @@ YOUR TASK:
 Extract claim segments from LLM output (ChatGPT, Perplexity, etc.) and map each to the source URL the LLM cited for it.
 
 WHAT TO EXTRACT:
-- Factual claim segments as written by the LLM (preserve the original wording)
+- Factual claim segments as written by the LLM
 - Complete thoughts or statements, not individual facts
 - Claims that have a specific source citation nearby
 - The context surrounding each claim (for checking cherry-picking)
@@ -36,16 +36,28 @@ Output:
 }}
 
 IMPORTANT RULES:
-1. **PRESERVE ORIGINAL WORDING**: Don't paraphrase or atomize - keep the LLM's exact phrasing
+1. **SELF-CONTAINED CLAIM TEXT**: Write claim_text as a fully self-contained sentence that makes sense with zero surrounding context. If the original phrasing is a fragment or uses pronouns like "it", "they", "this", "some" without a clear referent, restore the missing subject or topic using the surrounding context. The reader must understand exactly what is being claimed without reading anything else.
 2. **MAP TO CITED SOURCE**: Each claim should be linked to the URL mentioned near it
 3. **INCLUDE CONTEXT**: Capture surrounding text to check for selective quotation
 4. **DON'T BREAK DOWN**: Keep compound statements together if they cite one source
 5. **FOCUS ON SOURCE-BACKED CLAIMS**: Ignore opinions or unsupported statements
 
+SELF-CONTAINED CLAIM EXAMPLES:
+- Original fragment: "some are present, but not always in maximal form"
+  Context: discussing omega-3 fatty acids in farmed salmon
+  claim_text: "Omega-3 fatty acids are present in farmed salmon, but not always in maximal concentrations"
+
+- Original fragment: "it has grown significantly since 2020"
+  Context: about the global EV market
+  claim_text: "The global EV market has grown significantly since 2020"
+
+- Original: "AI models can now process images 3x faster than previous versions"
+  claim_text: "AI models can now process images 3x faster than previous versions" (already self-contained, keep as-is)
+
 WHAT YOU'RE LOOKING FOR:
-- "According to [source], X happened..." → Extract "X happened" + source URL
-- "The study shows A, B, and C [1]" → Extract "A, B, and C" + source [1]
-- "As reported in [link], the company..." → Extract claim + link
+- "According to [source], X happened..." -> Extract "X happened" + source URL
+- "The study shows A, B, and C [1]" -> Extract "A, B, and C" + source [1]
+- "As reported in [link], the company..." -> Extract claim + link
 
 EXAMPLES:
 
@@ -59,13 +71,13 @@ Your Output:
 {{
   "claims": [
     {{
-      "claim_text": "AI models can now process images 3x faster than previous versions. The research also found significant improvements in accuracy.",
+      "claim_text": "AI models can now process images 3x faster than previous versions, with significant improvements in accuracy.",
       "cited_sources": ["https://example.com/study"],
       "context": "According to a recent study from Stanford [...], AI models can now process images 3x faster than previous versions. The research also found significant improvements in accuracy. Meanwhile, other studies suggest...",
       "confidence": 0.95
     }},
     {{
-      "claim_text": "other studies suggest different approaches are needed",
+      "claim_text": "Other studies on AI image processing suggest different approaches are needed.",
       "cited_sources": ["https://other.com"],
       "context": "...The research also found significant improvements in accuracy. Meanwhile, other studies [https://other.com] suggest different approaches are needed.",
       "confidence": 0.85
@@ -80,7 +92,7 @@ Return ONLY valid JSON in this exact format:
 {{
   "claims": [
     {{
-      "claim_text": "exact text from LLM output",
+      "claim_text": "A fully self-contained sentence describing the claim, enriched with context if the original was a fragment",
       "cited_sources": ["https://source-url1.com", "https://source-url2.com"],
       "context": "surrounding text for context",
       "confidence": 0.90
@@ -99,7 +111,7 @@ SOURCE LINKS FOUND:
 
 INSTRUCTIONS:
 1. Identify factual claim segments in the LLM output
-2. Preserve the LLM's original wording (don't paraphrase)
+2. Write each claim_text as a fully self-contained sentence - if the original is a fragment or uses pronouns without a clear referent, use the surrounding context to restore the missing subject or topic
 3. Map each claim to the source URL(s) cited nearby
 4. Include surrounding context (before and after the claim)
 5. Focus on source-backed claims, not opinions
@@ -107,9 +119,8 @@ INSTRUCTIONS:
 7. If multiple sources are cited together [1][2][3], include ALL of them in cited_sources list
 
 IMPORTANT:
-- Don't break down compound statements if they share one source
+- claim_text must stand alone - a reader with no other context must understand what is being claimed
 - Include enough context to check for cherry-picking
-- The claim_text should be the LLM's exact words
 - The cited_sources should be a LIST of exact URLs from the source links
 - If claim has [4][6][9], extract all three URLs into the cited_sources array
 
