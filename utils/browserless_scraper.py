@@ -218,6 +218,17 @@ GENERIC_SELECTORS = [
     '#article-body',
     '.post-body',
     '#primary',
+    # Elementor page builder selectors (WordPress + Elementor themes)
+    '.elementor-widget-container',
+    '.elementor-text-editor',
+    '.elementor-section',
+    '.elementor-widget-text-editor',
+    # Other page builders
+    '.wp-block-post-content',
+    '.fl-post-content',
+    '.vc_column-inner',
+    # Last resort: full body (JS strips nav/header/footer automatically)
+    'body',
 ]
 
 class BrowserlessScraper:

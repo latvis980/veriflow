@@ -129,7 +129,7 @@ class HTMLParser:
                 'url': url,
                 'anchor_text': anchor_text,
                 'position': idx,
-                'citation_number': number  # ✅ ADD THIS LINE - preserves original citation number
+                'citation_number': number  
             })
 
         # Clean the text (remove reference link lines)
