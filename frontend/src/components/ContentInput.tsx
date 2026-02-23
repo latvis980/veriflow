@@ -142,9 +142,9 @@ const ContentInput = ({
           ) : (
             <button
               onClick={() => setInputMode("text")}
-              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
-              <Link2 size={14} />
+              <Link2 size={15} />
               Paste text instead
             </button>
           )
@@ -153,7 +153,7 @@ const ContentInput = ({
 
       {/* Mode description -- always visible above the input */}
       {inputMode === "text" && (
-        <p className="text-sm text-muted-foreground mb-3 leading-relaxed">
+        <p className="text-base text-muted-foreground mb-3 leading-relaxed max-w-[66%]">
           <span className="font-medium text-foreground">{modeInfo.label}: </span>
           {modeInfo.hint}
         </p>
