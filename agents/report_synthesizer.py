@@ -28,7 +28,7 @@ import json
 from prompts.report_synthesizer_prompts import get_report_synthesizer_prompts
 from utils.logger import fact_logger
 from utils.langsmith_config import langsmith_config
-from utils.async_utils import safe_float
+
 
 # ============================================================================
 # PYDANTIC OUTPUT MODEL
@@ -55,7 +55,7 @@ class SynthesisReport(BaseModel):
 
     # The main output - human readable summary
     summary: str = Field(
-        description="A comprehensive 3-5 paragraph analysis summary in plain language explaining what was found, what it means, and what readers should know"
+        description="A comprehensive analysis in plain language with section headers and paragraphs covering: verdict, fact-checking results, bias/framing, manipulation signals, and caveats"
     )
 
     # Simple lists for structured data
@@ -456,7 +456,7 @@ Key Findings:
         if "key_claims_analysis" in mode_reports:
             kc = mode_reports["key_claims_analysis"]
             summary = kc.get("summary", {})
-            avg_conf = safe_float(summary.get("average_confidence", 0.5))
+            avg_conf = summary.get("average_confidence", 0.5)
 
             if avg_conf >= 0.7:
                 score += 15
@@ -469,7 +469,7 @@ Key Findings:
         if "bias_analysis" in mode_reports:
             bias = mode_reports["bias_analysis"]
             analysis = bias.get("analysis", {})
-            bias_score = abs(safe_float(analysis.get("consensus_bias_score", 0)))
+            bias_score = abs(analysis.get("consensus_bias_score", 0))
 
             if bias_score > 6:
                 score -= 15
@@ -481,7 +481,7 @@ Key Findings:
         # Check manipulation if available
         if "manipulation_detection" in mode_reports:
             manip = mode_reports["manipulation_detection"]
-            manip_score = safe_float(manip.get("manipulation_score", 0))
+            manip_score = manip.get("manipulation_score", 0)
 
             if manip_score > 6:
                 score -= 20
