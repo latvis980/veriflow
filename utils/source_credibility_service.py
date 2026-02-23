@@ -122,25 +122,53 @@ class SourceCredibilityService:
         )
 
     def _extract_domain(self, url: str) -> str:
-        """Extract clean root domain from URL (strips subdomains like 'edition.' or 'www.')"""
-        # Try tldextract first - use offline snapshot to avoid network calls on Railway
+        """Extract clean root domain from URL (strips subdomains like 'edition.' or 'www.').
+
+        Uses tldextract if available, otherwise falls back to a pure-Python heuristic
+        that handles common cases including country-code TLDs like .co.uk.
+        """
+        # Try tldextract first (offline snapshot - no network calls)
         try:
             import tldextract
-            # suffix_list_urls=() disables downloading the PSL list - uses bundled snapshot
             no_fetch = tldextract.TLDExtract(suffix_list_urls=())
             extracted = no_fetch(url)
             if extracted.domain and extracted.suffix:
                 return f"{extracted.domain}.{extracted.suffix}".lower()
+        except ImportError:
+            pass  # Not installed - use pure-Python fallback below
         except Exception as e:
-            fact_logger.logger.debug(f"tldextract failed for {url}: {e}")
+            fact_logger.logger.debug(f"tldextract error for {url}: {e}")
 
-        # Fallback: urlparse with manual www stripping
+        # Pure-Python fallback - no external libraries needed
+        # Handles: edition.cnn.com -> cnn.com, forums.bbc.co.uk -> bbc.co.uk
         try:
             parsed = urlparse(url)
-            domain = parsed.netloc.lower()
-            if domain.startswith('www.'):
-                domain = domain[4:]
-            return domain
+            host = parsed.netloc.lower()
+
+            # Strip port if present (e.g. example.com:8080)
+            if ':' in host:
+                host = host.split(':')[0]
+
+            parts = host.split('.')
+
+            if len(parts) <= 2:
+                # Already a root domain (e.g. cnn.com) - nothing to strip
+                return host
+
+            # Known second-level TLDs that need 3 parts to form the root domain
+            # e.g. bbc.co.uk needs parts [-3:] not just [-2:]
+            TWO_LEVEL_TLDS = {
+                'co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'me'
+            }
+
+            # If second-to-last part is a known 2-level TLD indicator AND
+            # last part is a short country code (2 chars), keep 3 parts
+            if len(parts[-1]) == 2 and parts[-2] in TWO_LEVEL_TLDS:
+                return '.'.join(parts[-3:])
+
+            # Otherwise keep just the last 2 parts
+            return '.'.join(parts[-2:])
+
         except Exception:
             return ""
 

@@ -23,6 +23,7 @@ beautifulsoup4==4.12.3
 lxml==5.1.0
 cloudscraper>=1.2.71
 pypdf>=4.0.0
+tldextract>=3.4.0
 
 # Web framework
 flask==3.0.0
