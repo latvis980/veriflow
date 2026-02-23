@@ -48,6 +48,43 @@ _ASYNC_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
+def _translate_api_error(e: Exception) -> Exception:
+    """
+    Translate raw API exceptions into user-readable messages.
+
+    Single place to map provider-specific error codes to friendly strings.
+    Called by run_async_in_thread so ALL async operations across ALL modes
+    get consistent error translation automatically.
+
+    Add new providers or error codes here as needed.
+    """
+    error_str = str(e)
+
+    # OpenAI quota exhausted - account has no remaining credits
+    if "insufficient_quota" in error_str or (
+        hasattr(e, "code") and getattr(e, "code", None) == "insufficient_quota"
+    ):
+        return Exception(
+            "OpenAI API quota exceeded. The service has run out of credits. "
+            "Please top up at https://platform.openai.com/account/billing"
+        )
+
+    # OpenAI temporary rate limit (different from quota - just needs a wait)
+    if "rate_limit_exceeded" in error_str:
+        return Exception(
+            "OpenAI API rate limit reached. Please wait a moment and try again."
+        )
+
+    # Fallback: "'error'" means a quota error was mangled somewhere in the async chain
+    if error_str == "'error'":
+        return Exception(
+            "OpenAI API quota exceeded. The service has run out of credits. "
+            "Please top up at https://platform.openai.com/account/billing"
+        )
+
+    return e
+
+
 def run_async_in_thread(coro: Coroutine[Any, Any, T]) -> T:
     """
     Run an async coroutine in a real OS thread with its own event loop.
@@ -76,11 +113,18 @@ def run_async_in_thread(coro: Coroutine[Any, Any, T]) -> T:
     Returns:
         Result of the coroutine
 
+    Raises:
+        Exception with a user-readable message for known API errors
+        (quota exhausted, rate limits). See _translate_api_error.
+
     Usage:
         result = run_async_in_thread(my_async_function(arg1, arg2))
     """
     future = _ASYNC_EXECUTOR.submit(asyncio.run, coro)
-    return future.result()
+    try:
+        return future.result()
+    except Exception as e:
+        raise _translate_api_error(e) from None
 
 
 def cleanup_thread_loop():
