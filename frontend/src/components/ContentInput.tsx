@@ -14,7 +14,7 @@ type Props = {
 };
 
 // ---------------------------------------------------------------------------
-// Link detection helpers (mirrors the old vanilla-JS utils)
+// Link detection helpers
 // ---------------------------------------------------------------------------
 
 function countLinks(text: string): number {
@@ -44,6 +44,46 @@ function countLinks(text: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Mode descriptions -- shown above the textarea
+// ---------------------------------------------------------------------------
+
+const modeDescriptions: Record<string, { label: string; hint: string }> = {
+  "comprehensive": {
+    label: "Full-spectrum analysis",
+    hint: "Runs all applicable analyses in one pass: source credibility, claims verification, bias, deception, and manipulation. Paste any article, text, or AI-generated content.",
+  },
+  "key-claims": {
+    label: "Key claims verification",
+    hint: "Identifies the 2-3 strongest factual claims and verifies each against independent sources. Paste the article or text you want to check.",
+  },
+  "bias-analysis": {
+    label: "Bias and framing detection",
+    hint: "Detects political or ideological lean, framing techniques, and one-sided sourcing patterns. Paste a news article, op-ed, or any content.",
+  },
+  "lie-detection": {
+    label: "Deception signal analysis",
+    hint: "Scans for linguistic markers of deception, hedging, and unsupported assertions. Paste the article or text to analyze.",
+  },
+  "manipulation": {
+    label: "Manipulation detection",
+    hint: "Flags agenda-driven framing, cherry-picked data, false equivalences, and emotional manipulation techniques. Paste an article or text to check.",
+  },
+  "llm-output": {
+    label: "LLM output verification",
+    hint: "Checks if AI-generated text truly matches the sources it cites. Verifies claims line by line against the linked materials and flags hallucinations, unsupported statements, citation mismatches, and misleading framing. Copy and paste the full AI response together with its source links (ChatGPT, Perplexity, etc.)",
+  },
+};
+
+const simplePlaceholders: Record<string, string> = {
+  "comprehensive": "Paste article, text, or AI-generated content here...",
+  "key-claims": "Paste article or text here...",
+  "bias-analysis": "Paste article or text here...",
+  "lie-detection": "Paste article or text here...",
+  "manipulation": "Paste article or text here...",
+  "llm-output": "Paste the AI response with its source links here...",
+};
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -54,7 +94,6 @@ const ContentInput = ({
   const [inputMode, setInputMode] = useState<"text" | "url">("text");
 
   // After a URL fetch completes and content is populated, switch to text view
-  // so the user can see the fetched article text
   useEffect(() => {
     if (!isFetching && inputMode === "url" && content) {
       setInputMode("text");
@@ -70,47 +109,62 @@ const ContentInput = ({
     }
   }, [isLlmMode]);
 
-  // --- Link detection (only evaluated in LLM Output mode) ----------------
+  // --- Link detection (only evaluated in LLM Output mode) ---
   const linkCount = useMemo(
     () => (isLlmMode ? countLinks(content) : 0),
     [content, isLlmMode],
   );
 
-  // Only show indicator once the user has typed enough (avoids flashing)
   const showIndicator = isLlmMode && content.length > 50;
   const hasLinks = linkCount > 0;
 
-  const placeholders: Record<string, string> = {
-    "comprehensive": "Runs all applicable analyses in one pass – source credibility, claims verification, bias, deception, and manipulation. Paste any article, text, or AI-generated content...",
-    "key-claims": "Identifies the 2-3 strongest factual claims and verifies each against independent sources. Paste the article or text you want to check...",
-    "bias-analysis": "Detects political or ideological lean, framing techniques, and one-sided sourcing patterns. Paste a news article, op-ed, or any content...",
-    "lie-detection": "Scans for linguistic markers of deception, hedging, and unsupported assertions. Paste the article or text to analyze...",
-    "manipulation": "Flags agenda-driven framing, cherry-picked data, false equivalences, and emotional manipulation techniques. Paste an article or text to check...",
-    "llm-output": "Checks if AI-generated text truly matches the sources it cites. Verifies claims line by line against the linked materials and flags hallucinations, unsupported or overstated statements, missing context, quote/citation mismatches, and misleading framing. Just copy and paste the AI output together with its source links (ChatGPT, Perplexity, etc.)",
-  };
+  const modeInfo = modeDescriptions[mode] || modeDescriptions["comprehensive"];
+  const placeholder = simplePlaceholders[mode] || simplePlaceholders["comprehensive"];
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
-      <div className="flex items-center justify-between mb-3">
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-2">
         <h3 className="text-base font-semibold">
           {inputMode === "text" ? "Content to Analyze" : "Article URL"}
         </h3>
         {!isLlmMode && (
-          <button
-            onClick={() => setInputMode(inputMode === "text" ? "url" : "text")}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Link2 size={14} />
-            {inputMode === "text" ? "Paste URL instead" : "Paste text instead"}
-          </button>
+          inputMode === "text" ? (
+            <button
+              onClick={() => setInputMode("url")}
+              className="relative flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/20 hover:border-primary transition-colors"
+            >
+              {/* pulse ring */}
+              <span className="absolute inset-0 rounded-md animate-ping border border-primary/40 pointer-events-none" />
+              <Link2 size={15} />
+              Paste URL instead
+            </button>
+          ) : (
+            <button
+              onClick={() => setInputMode("text")}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Link2 size={14} />
+              Paste text instead
+            </button>
+          )
         )}
       </div>
 
+      {/* Mode description -- always visible above the input */}
+      {inputMode === "text" && (
+        <p className="text-sm text-muted-foreground mb-3 leading-relaxed">
+          <span className="font-medium text-foreground">{modeInfo.label}: </span>
+          {modeInfo.hint}
+        </p>
+      )}
+
+      {/* Input area */}
       {inputMode === "text" ? (
         <textarea
           value={content}
           onChange={(e) => onContentChange(e.target.value)}
-          placeholder={placeholders[mode] || placeholders.comprehensive}
+          placeholder={placeholder}
           className="w-full min-h-[200px] resize-y rounded-lg border border-border bg-background p-3 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         />
       ) : (
