@@ -267,7 +267,7 @@ const Index = () => {
               </div>
 
               {/* Report -- always rendered with the mode that actually produced results */}
-              <ReportRenderer mode={analyzedMode} data={result} onReset={fullReset} />
+              <ReportRenderer mode={analyzedMode} data={result} onReset={fullReset} sourceUrl={url || undefined} />
             </>
           )}
         </div>

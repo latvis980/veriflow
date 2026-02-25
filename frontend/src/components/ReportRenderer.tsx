@@ -12,6 +12,7 @@ type Props = {
   mode: AnalysisMode;
   data: any;
   onReset: () => void;
+  sourceUrl?: string;
 };
 
 const modeLabel: Record<string, string> = {
@@ -23,7 +24,7 @@ const modeLabel: Record<string, string> = {
   "llm-output": "LLM Output Verification",
 };
 
-const ReportRenderer = ({ mode, data, onReset }: Props) => {
+const ReportRenderer = ({ mode, data, onReset, sourceUrl }: Props) => {
   const reportRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -45,6 +46,14 @@ const ReportRenderer = ({ mode, data, onReset }: Props) => {
     const timestamp = new Date().toLocaleString();
     const title = modeLabel[mode] ?? "VeriFlow Report";
 
+    // Build source URL block for the printed PDF header
+    const sourceUrlHtml = sourceUrl
+      ? `<div class="source-url">
+           <span class="source-label">Source:</span>
+           <a href="${sourceUrl}" target="_blank" class="source-link">${sourceUrl}</a>
+         </div>`
+      : "";
+
     printWindow.document.write(`
 <!DOCTYPE html>
 <html lang="en">
@@ -55,19 +64,75 @@ const ReportRenderer = ({ mode, data, onReset }: Props) => {
   ${styleLinks}
   ${styleBlocks}
   <style>
-    /* ---- Print overrides ---- */
+    /* ---- Print overrides: force white background + dark readable text ---- */
     @media print {
       @page {
         margin: 15mm 15mm 15mm 15mm;
         size: A4;
       }
-      body {
+      .no-print { display: none !important; }
+      .rounded-xl, section, article { page-break-inside: avoid; }
+
+      /* Reset all dark backgrounds to white */
+      body, #report-content, #report-content * {
+        background: white !important;
+        background-color: white !important;
+        color: #111 !important;
+        border-color: #d1d5db !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-      .no-print { display: none !important; }
-      /* Prevent awkward page breaks inside cards */
-      .rounded-xl, section, article { page-break-inside: avoid; }
+
+      /* Headings */
+      h1, h2, h3, h4, h5, h6 {
+        color: #111 !important;
+      }
+
+      /* Muted / secondary text: dark gray instead of light gray */
+      .text-muted-foreground,
+      [class*="text-muted"] {
+        color: #374151 !important;
+      }
+
+      /* Cards and badges */
+      .bg-card, .bg-secondary, .bg-muted,
+      [class*="bg-card"], [class*="bg-secondary"], [class*="bg-muted"] {
+        background: #f3f4f6 !important;
+        background-color: #f3f4f6 !important;
+      }
+
+      /* Score / status badges that use colored backgrounds */
+      [class*="bg-score-"], [class*="bg-green"], [class*="bg-red"],
+      [class*="bg-yellow"], [class*="bg-blue"] {
+        filter: brightness(0.85) saturate(1.2);
+      }
+
+      /* Links: show URL in parentheses when printed */
+      a[href]::after {
+        content: " (" attr(href) ")";
+        font-size: 0.75em;
+        color: #374151 !important;
+      }
+
+      /* Source URL in the PDF header */
+      .pdf-source-block {
+        margin-bottom: 12mm;
+        padding-bottom: 4mm;
+        border-bottom: 1px solid #d1d5db;
+      }
+      .pdf-source-block .source-label {
+        font-weight: 600;
+        color: #111 !important;
+        margin-right: 0.4em;
+      }
+      .pdf-source-block .source-link {
+        color: #1d4ed8 !important;
+        text-decoration: underline;
+      }
+      /* Suppress the "after" pseudo-element for the source link to avoid duplication */
+      .pdf-source-block .source-link::after {
+        content: "" !important;
+      }
     }
 
     /* ---- Screen styles for the preview window ---- */
@@ -83,7 +148,7 @@ const ReportRenderer = ({ mode, data, onReset }: Props) => {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1rem;
       padding-bottom: 1rem;
       border-bottom: 1px solid hsl(216 34% 17%);
     }
@@ -116,9 +181,26 @@ const ReportRenderer = ({ mode, data, onReset }: Props) => {
       color: white;
     }
     .btn:hover { opacity: 0.85; }
+
+    /* Source URL block - screen view */
+    .source-url {
+      margin-top: 0.75rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.8rem;
+    }
+    .source-label {
+      color: hsl(215 20% 55%);
+      margin-right: 0.3em;
+    }
+    .source-link {
+      color: hsl(221 83% 70%);
+      text-decoration: underline;
+      word-break: break-all;
+    }
   </style>
 </head>
 <body>
+  <!-- Screen-only toolbar (hidden when printing) -->
   <div class="print-header no-print">
     <div>
       <h1>VeriFlow - ${title}</h1>
@@ -129,6 +211,13 @@ const ReportRenderer = ({ mode, data, onReset }: Props) => {
       <button class="btn btn-primary" onclick="window.print()">Save as PDF</button>
     </div>
   </div>
+
+  <!-- Source URL: visible both on screen and in the printed PDF -->
+  ${sourceUrl ? `
+  <div class="pdf-source-block source-url">
+    <span class="source-label">Source:</span>
+    <a href="${sourceUrl}" target="_blank" class="source-link">${sourceUrl}</a>
+  </div>` : ""}
 
   <div id="report-content">
     ${reportEl.innerHTML}
@@ -168,7 +257,7 @@ const ReportRenderer = ({ mode, data, onReset }: Props) => {
           onClick={handlePrint}
           className="rounded-lg border border-border px-5 py-2 text-base font-medium hover:bg-secondary transition-colors"
         >
-          Download PDF
+          Save as PDF
         </button>
       </div>
     </div>
