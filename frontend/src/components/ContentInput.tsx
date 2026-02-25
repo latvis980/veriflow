@@ -124,8 +124,8 @@ const ContentInput = ({
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       {/* Header row */}
-      <div className="flex items-center justify-between mb-5">
-        <h3 className="text-base font-semibold">
+      <div className="flex items-center justify-between mb-8">
+        <h3 className="text-lg font-semibold">
           {inputMode === "text" ? "Content to Analyze" : "Article URL"}
         </h3>
         {!isLlmMode && (
@@ -153,7 +153,7 @@ const ContentInput = ({
 
       {/* Mode description -- always visible above the input */}
       {inputMode === "text" && (
-        <p className="text-base text-muted-foreground mb-3 leading-relaxed max-w-[66%]">
+        <p className="text-base text-muted-foreground mb-6 leading-relaxed">
           <span className="font-medium text-foreground">{modeInfo.label}: </span>
           {modeInfo.hint}
         </p>
