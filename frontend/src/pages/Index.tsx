@@ -146,7 +146,7 @@ const Index = () => {
 
       <div className="flex flex-1 overflow-hidden">
         {/* ── Fixed left sidebar ── */}
-        <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-card px-3 py-6 overflow-y-auto">
+        <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-card px-3 py-6 overflow-y-auto fixed top-0 left-0 h-screen z-10">
           <ModeSelector
             selected={mode}
             onSelect={handleModeSelect}
@@ -155,14 +155,14 @@ const Index = () => {
         </aside>
 
         {/* ── Main content area ── */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto md:ml-60">
           <div className="mx-auto max-w-3xl px-6 py-10">
             {/* Hero */}
-            <h1 className="text-3xl md:text-4xl font-display mb-2">
-              AI Content Analyzer
+            <h1 className="text-3xl md:text-4xl font-display mb-1">
+              {MODE_INFO[mode].label}
             </h1>
             <p className="text-muted-foreground text-base mb-8">
-              Verify LLM outputs, detect bias, deception, and manipulation.
+              {MODE_INFO[mode].description}
             </p>
 
             {/* Mobile mode selector */}
