@@ -171,7 +171,8 @@ class ManipulationOrchestrator:
         job_id: str,
         source_info: str = "Unknown source",
         source_credibility: Optional[Dict[str, Any]] = None,
-        standalone: bool = True  # ADD THIS
+        standalone: bool = True,
+        shared_scraper=None
     ) -> Dict[str, Any]:
         """
         Run the full manipulation detection pipeline with progress updates
@@ -300,8 +301,9 @@ class ManipulationOrchestrator:
                 content_language="english"
             )
 
-            #  Create scraper ONCE in the async context (correct event loop)
-            self.scraper = BrowserlessScraper(self.config)
+            #  Use shared scraper (from comprehensive mode) or create a new one
+            using_shared_scraper = shared_scraper is not None
+            self.scraper = shared_scraper if shared_scraper else BrowserlessScraper(self.config)
 
             # ================================================================
             # STAGE 3: Fact Verification ( PARALLEL PROCESSING)
@@ -503,20 +505,22 @@ class ManipulationOrchestrator:
                 }
             )
 
-            # Clean up scraper to release browser resources
-            try:
-                await self.scraper.close()
-            except Exception as cleanup_error:
-                fact_logger.logger.debug(f"Scraper cleanup: {cleanup_error}")
+            # Clean up scraper only if we created it (not shared)
+            if not using_shared_scraper:
+                try:
+                    await self.scraper.close()
+                except Exception as cleanup_error:
+                    fact_logger.logger.debug(f"Scraper cleanup: {cleanup_error}")
 
             return result
 
         except CancelledException:
-            # Clean up on cancellation too
-            try:
-                await self.scraper.close()
-            except Exception:
-                pass
+            # Clean up on cancellation too (only if we own the scraper)
+            if not using_shared_scraper:
+                try:
+                    await self.scraper.close()
+                except Exception:
+                    pass
             job_manager.add_progress(job_id, " Analysis cancelled by user")
             raise
 
@@ -525,11 +529,12 @@ class ManipulationOrchestrator:
             import traceback
             fact_logger.logger.error(f"Traceback: {traceback.format_exc()}")
             job_manager.add_progress(job_id, f" Error: {str(e)}")
-            # Clean up scraper on error
-            try:
-                await self.scraper.close()
-            except Exception:
-                pass
+            # Clean up scraper on error (only if we own it)
+            if not using_shared_scraper:
+                try:
+                    await self.scraper.close()
+                except Exception:
+                    pass
             raise
 
     # =========================================================================
