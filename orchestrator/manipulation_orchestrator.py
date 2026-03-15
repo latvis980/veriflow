@@ -210,6 +210,8 @@ class ManipulationOrchestrator:
             # ================================================================
             # STAGE 0: Log Source Credibility Context (NEW)
             # ================================================================
+            self._check_cancellation(job_id)
+
             if source_credibility:
                 tier = source_credibility.get('tier', '?')
                 bias = source_credibility.get('bias_rating', 'Unknown')
@@ -449,6 +451,7 @@ class ManipulationOrchestrator:
             # ================================================================
             # STAGE 6: Save Audit File
             # ================================================================
+            self._check_cancellation(job_id)
             job_manager.add_progress(job_id, " Saving audit report...")
 
             audit_path = save_search_audit(

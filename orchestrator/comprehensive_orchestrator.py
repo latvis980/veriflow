@@ -674,6 +674,8 @@ class ComprehensiveOrchestrator:
         """
         start_time = time.time()
 
+        self._check_cancellation(job_id)
+
         self._send_stage_update(job_id, "synthesis", "Synthesizing final report...")
         job_manager.add_progress(job_id, "Running AI-powered report synthesis...")
 
@@ -960,6 +962,7 @@ class ComprehensiveOrchestrator:
             job_manager.add_progress(job_id, "Stage 3: Synthesizing results...")
             stage3_results = await self._run_stage3(job_id, stage1_results, stage2_results)
 
+            self._check_cancellation(job_id)
             job_manager.add_progress(job_id, "Stage 3 complete")
 
             # ================================================================

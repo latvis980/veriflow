@@ -107,6 +107,11 @@ class BiasCheckOrchestrator:
         if job_manager.is_cancelled(job_id):
             raise Exception("Job cancelled by user")
 
+    def _check_cancellation_safe(self):
+        """Check cancellation using the active job_id (no-op if not set)"""
+        if hasattr(self, '_active_job_id') and self._active_job_id:
+            self._check_cancellation(self._active_job_id)
+
     def _build_publication_context_from_credibility(
         self, 
         source_credibility: Dict[str, Any]
@@ -295,6 +300,8 @@ class BiasCheckOrchestrator:
                     )
                     publication_profile_data = publication_profile.model_dump()
 
+            self._check_cancellation_safe()
+
             # Step 1: Run bias analysis
             fact_logger.logger.info("📊 Step 1: Multi-model bias analysis")
 
@@ -302,6 +309,8 @@ class BiasCheckOrchestrator:
                 text=text,
                 publication_name=resolved_publication_name
             )
+
+            self._check_cancellation_safe()
 
             # Step 2: Prepare report data
             fact_logger.logger.info("📝 Step 2: Preparing reports")
@@ -320,6 +329,8 @@ class BiasCheckOrchestrator:
                 "mbfc_context": mbfc_context,
                 "processing_time": bias_results["processing_time"]
             }
+
+            self._check_cancellation_safe()
 
             # Step 3: Save reports locally
             fact_logger.logger.info("💾 Step 3: Saving reports locally")
@@ -341,6 +352,8 @@ class BiasCheckOrchestrator:
                 "claude_bias_analysis.json",
                 json.dumps(bias_results["claude_analysis"], indent=2)
             )
+
+            self._check_cancellation_safe()
 
             # Step 4: Upload to Cloudflare R2
             r2_upload_status = {"success": False, "error": "R2 not enabled"}
@@ -476,6 +489,7 @@ class BiasCheckOrchestrator:
         if job_id:
             from utils.job_manager import job_manager
 
+            self._active_job_id = job_id
             job_manager.add_progress(job_id, "📊 Starting bias analysis...")
             self._check_cancellation(job_id)
 
@@ -511,6 +525,7 @@ class BiasCheckOrchestrator:
 
         if job_id:
             from utils.job_manager import job_manager
+            self._check_cancellation(job_id)
 
             # Report credibility source
             if result.get("used_prefetched_credibility"):

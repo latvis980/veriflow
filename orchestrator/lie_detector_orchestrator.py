@@ -73,6 +73,7 @@ class LieDetectorOrchestrator:
             fact_logger.logger.warning(f"⚠️ Cloudflare R2 not configured: {e}")
             self.r2_enabled = False
 
+        self._active_job_id = None  # Track active job for cancellation in process()
         fact_logger.log_component_start("LieDetectorOrchestrator")
 
     def _check_cancellation(self, job_id: str):
@@ -80,6 +81,12 @@ class LieDetectorOrchestrator:
         from utils.job_manager import job_manager
         if job_manager.is_cancelled(job_id):
             raise Exception("Job cancelled by user")
+
+    def _check_cancellation_safe(self, job_id: Optional[str] = None):
+        """Check cancellation using provided job_id or the active job_id (no-op if neither)"""
+        jid = job_id or self._active_job_id
+        if jid:
+            self._check_cancellation(jid)
 
     def _build_enhanced_context(
         self,
@@ -180,6 +187,8 @@ class LieDetectorOrchestrator:
                 credibility_context=credibility_context  # NEW: Pass context
             )
 
+            self._check_cancellation_safe(job_id)
+
             # Step 2: Prepare report data
             fact_logger.logger.info("📝 Step 2: Preparing analysis report")
 
@@ -201,6 +210,8 @@ class LieDetectorOrchestrator:
                 }
             }
 
+            self._check_cancellation_safe(job_id)
+
             # Step 3: Save reports locally
             fact_logger.logger.info("💾 Step 3: Saving reports locally")
 
@@ -210,6 +221,8 @@ class LieDetectorOrchestrator:
                 json.dumps(report_data, indent=2)
             )
             fact_logger.logger.info(f"✅ Saved analysis report: {analysis_report_path}")
+
+            self._check_cancellation_safe(job_id)
 
             # Step 4: Upload to R2 if enabled
             r2_upload_status = {"success": False, "error": "R2 disabled"}
@@ -303,6 +316,7 @@ class LieDetectorOrchestrator:
             Complete lie detection analysis results
         """
         from utils.job_manager import job_manager
+        self._active_job_id = job_id
 
         try:
             job_manager.add_progress(job_id, "Starting deception marker analysis...")
@@ -341,6 +355,8 @@ class LieDetectorOrchestrator:
                 source_credibility=source_credibility,
                 save_to_r2=True
             )
+
+            self._check_cancellation(job_id)
 
             # Add progress about calibration
             if result.get("used_credibility_calibration"):
