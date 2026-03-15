@@ -19,6 +19,7 @@ from langsmith import traceable
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import time
+from datetime import datetime
 
 from prompts.key_claims_extractor_prompts import get_key_claims_prompts
 from utils.logger import fact_logger
@@ -216,8 +217,12 @@ class KeyClaimsExtractor:
             ("user", user_prompt + "\n\n{format_instructions}\n\nReturn your response as valid JSON.")
         ])
 
+        # Inject current date awareness and format instructions as partial variables
+        now = datetime.now()
         prompt_with_format = prompt.partial(
-            format_instructions=self.parser.get_format_instructions()
+            format_instructions=self.parser.get_format_instructions(),
+            current_date=now.strftime("%B %d, %Y"),
+            current_year=str(now.year)
         )
 
         callbacks = langsmith_config.get_callbacks("key_claims_extractor")

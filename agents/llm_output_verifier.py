@@ -18,6 +18,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 import time
+from datetime import datetime
 
 from utils.logger import fact_logger
 from utils.langsmith_config import langsmith_config
@@ -177,13 +178,17 @@ class LLMOutputVerifier:
             llm = get_openai_llm(model="gpt-4o", temperature=0, json_mode=True)
             chain = prompt | llm | self.parser
 
+            # Inject current date awareness
+            now = datetime.now()
+
             response = await chain.ainvoke({
                 "claim_text": claim.claim_text,
                 "claim_context": claim.context,
                 "excerpts": formatted_excerpts,
                 "sources_info": sources_info,
                 "num_sources": len(available_sources),
-                "format_instructions": self.parser.get_format_instructions()
+                "format_instructions": self.parser.get_format_instructions(),
+                "current_date": now.strftime("%B %d, %Y")
             })
 
             # Build result

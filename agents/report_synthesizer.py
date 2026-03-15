@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import time
 import json
+from datetime import datetime
 
 from prompts.report_synthesizer_prompts import get_report_synthesizer_prompts
 from utils.logger import fact_logger
@@ -326,8 +327,11 @@ Key Findings:
             ("user", self.prompts["user"])
         ])
 
+        # Inject current date awareness and format instructions as partial variables
+        now = datetime.now()
         prompt_with_format = prompt.partial(
-            format_instructions=self.parser.get_format_instructions()
+            format_instructions=self.parser.get_format_instructions(),
+            current_date=now.strftime("%B %d, %Y")
         )
 
         # Execute chain
