@@ -1,13 +1,14 @@
 // src/components/reports/ComprehensiveReport.tsx
 import { cn } from "@/lib/utils";
-import { ScoreBadge, SessionInfo, getScoreColor, getScoreBg, getScoreLabel } from "./shared";
+import { ScoreBadge, SessionInfo, getScoreBg, getScoreLabel } from "./shared";
 import KeyClaimsReport from "./KeyClaimsReport";
 import BiasReport from "./BiasReport";
 import DeceptionReport from "./DeceptionReport";
 import ManipulationReport from "./ManipulationReport";
 import LLMOutputReport from "./LLMOutputReport";
 import { useState, useMemo } from "react";
-import { ChevronDown, ChevronUp, Copy, Check, Shield, Search, Scale, AlertTriangle, Info } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, Check } from "lucide-react";
+import Markdown from "react-markdown";
 
 type Props = {
   data: {
@@ -49,52 +50,6 @@ const modeLabels: Record<string, string> = {
   lie_detection: "Deception Detection",
   llm_output_verification: "LLM Output Verification",
 };
-
-// Section styling for the parsed summary
-const summarySections: Record<string, { icon: typeof Shield; color: string; borderColor: string }> = {
-  VERDICT: { icon: Shield, color: "text-primary", borderColor: "border-primary" },
-  "FACT-CHECKING": { icon: Search, color: "text-score-moderate", borderColor: "border-score-moderate" },
-  "BIAS AND FRAMING": { icon: Scale, color: "text-score-elevated", borderColor: "border-score-elevated" },
-  "MANIPULATION AND DECEPTION": { icon: AlertTriangle, color: "text-score-low", borderColor: "border-score-low" },
-  CAVEATS: { icon: Info, color: "text-muted-foreground", borderColor: "border-muted-foreground" },
-};
-
-/** Parse the raw summary string into labeled sections */
-function parseSummary(summary: string): { label: string; text: string }[] {
-  const sectionLabels = Object.keys(summarySections);
-  const pattern = new RegExp(
-    `(${sectionLabels.map(l => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\s*[—–-]\\s*`,
-    "g"
-  );
-
-  const parts: { label: string; text: string }[] = [];
-  let lastIndex = 0;
-  let lastLabel = "";
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(summary)) !== null) {
-    // Capture any text before this label as part of the previous section
-    if (lastLabel && match.index > lastIndex) {
-      parts.push({ label: lastLabel, text: summary.slice(lastIndex, match.index).trim() });
-    } else if (!lastLabel && match.index > 0) {
-      // Text before the first label — treat as unlabeled intro
-      const intro = summary.slice(0, match.index).trim();
-      if (intro) parts.push({ label: "", text: intro });
-    }
-    lastLabel = match[1];
-    lastIndex = match.index + match[0].length;
-  }
-
-  // Capture the final section
-  if (lastLabel) {
-    parts.push({ label: lastLabel, text: summary.slice(lastIndex).trim() });
-  } else if (summary.trim()) {
-    // No recognized sections — return as a single block
-    parts.push({ label: "", text: summary.trim() });
-  }
-
-  return parts;
-}
 
 const ComprehensiveReport = ({ data }: Props) => {
   // Auto-expand all mode sections by default
@@ -171,11 +126,6 @@ const ComprehensiveReport = ({ data }: Props) => {
     }
   };
 
-  const parsedSections = useMemo(
-    () => (synth?.summary ? parseSummary(synth.summary) : []),
-    [synth?.summary]
-  );
-
   return (
     <div className="space-y-4">
       {/* Metadata Panel */}
@@ -250,31 +200,10 @@ const ComprehensiveReport = ({ data }: Props) => {
             </button>
           </div>
 
-          {/* Structured summary sections */}
-          {parsedSections.length > 0 && (
-            <div className="p-5 space-y-4">
-              {parsedSections.map((section, idx) => {
-                const config = section.label ? summarySections[section.label] : null;
-                const SectionIcon = config?.icon;
-
-                return (
-                  <div
-                    key={idx}
-                    className={cn(
-                      "rounded-lg p-4",
-                      config ? `border-l-4 ${config.borderColor} bg-secondary/20` : "bg-secondary/10"
-                    )}
-                  >
-                    {section.label && (
-                      <div className={cn("flex items-center gap-2 mb-2", config?.color)}>
-                        {SectionIcon && <SectionIcon size={15} />}
-                        <h4 className="text-sm font-semibold uppercase tracking-wide">{section.label}</h4>
-                      </div>
-                    )}
-                    <p className="text-sm leading-relaxed text-foreground/90">{section.text}</p>
-                  </div>
-                );
-              })}
+          {/* Markdown-rendered summary */}
+          {synth.summary && (
+            <div className="p-5 prose prose-sm dark:prose-invert max-w-none prose-headings:font-display prose-headings:text-foreground prose-h2:text-lg prose-h2:mt-5 prose-h2:mb-2 prose-h3:text-base prose-h3:mt-4 prose-h3:mb-1 prose-p:text-foreground/90 prose-p:leading-relaxed prose-li:text-foreground/90 prose-strong:text-foreground prose-blockquote:border-primary/40 prose-blockquote:text-foreground/80">
+              <Markdown>{synth.summary}</Markdown>
             </div>
           )}
 
