@@ -16,7 +16,7 @@ type ManipulationFinding = {
   manipulation_detected: boolean;
   manipulation_types: string[];
   manipulation_severity: string;
-  what_was_omitted: string;
+  what_was_omitted: string[];
   how_it_serves_agenda: string;
   corrected_context: string;
   sources_used: string[];
@@ -179,9 +179,9 @@ const ManipulationReport = ({ data }: Props) => {
                         Types: {f.manipulation_types.join(", ")}
                       </p>
                     )}
-                    {f.what_was_omitted && (
+                    {f.what_was_omitted?.length > 0 && (
                       <p className="text-sm text-muted-foreground">
-                        <strong>Omitted:</strong> {f.what_was_omitted}
+                        <strong>Omitted:</strong> {f.what_was_omitted.join("; ")}
                       </p>
                     )}
                     {f.corrected_context && (
