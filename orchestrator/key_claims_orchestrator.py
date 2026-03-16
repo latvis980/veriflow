@@ -314,6 +314,9 @@ class KeyClaimsOrchestrator:
             query_tasks = [generate_queries_for_claim(claim) for claim in claims]
             query_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
+            # Check cancellation after parallel query generation
+            self._check_cancellation(job_id)
+
             # Process query results
             all_queries_by_claim = {}
             freshness_by_claim = {}
@@ -370,6 +373,9 @@ class KeyClaimsOrchestrator:
 
             search_tasks = [search_for_claim(claim) for claim in claims]
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+            # Check cancellation after parallel searches
+            self._check_cancellation(job_id)
 
             # Process search results
             search_results_by_claim = {}
@@ -449,6 +455,9 @@ class KeyClaimsOrchestrator:
             filter_tasks = [filter_sources_for_claim(claim) for claim in claims]
             filter_results = await asyncio.gather(*filter_tasks, return_exceptions=True)
 
+            # Check cancellation after parallel filtering
+            self._check_cancellation(job_id)
+
             # Process filter results
             credible_urls_by_claim = {}
             source_metadata_by_claim = {}
@@ -494,8 +503,15 @@ class KeyClaimsOrchestrator:
                         url_to_claim_map[url] = []
                     url_to_claim_map[url].append(claim.id)
 
+            # Check cancellation before starting scraping
+            self._check_cancellation(job_id)
+
             # Scrape all URLs at once (browser pool handles concurrency)
-            all_scraped_content = await scraper.scrape_urls_for_facts(all_urls_to_scrape)
+            # Pass cancel_check so scraper can abort mid-batch
+            all_scraped_content = await scraper.scrape_urls_for_facts(
+                all_urls_to_scrape,
+                cancel_check=lambda: self._check_cancellation(job_id)
+            )
 
             # Organize scraped content by claim
             scraped_content_by_claim = {}
@@ -525,6 +541,9 @@ class KeyClaimsOrchestrator:
                 job_id, 
                 f"Scraped {successful_scrapes}/{len(all_urls_to_scrape)} sources in {scrape_duration:.1f}s"
             )
+
+            # Check cancellation after scraping
+            self._check_cancellation(job_id)
 
             # Build claim search audits
             for claim in claims:
@@ -600,6 +619,9 @@ class KeyClaimsOrchestrator:
 
             verify_tasks = [verify_single_claim(claim) for claim in claims]
             results = await asyncio.gather(*verify_tasks, return_exceptions=True)
+
+            # Check cancellation after parallel verification
+            self._check_cancellation(job_id)
 
             # Process verification results
             final_results = []

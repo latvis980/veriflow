@@ -240,6 +240,9 @@ class WebSearchOrchestrator:
             query_tasks = [generate_queries_for_fact(fact) for fact in facts]
             query_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
+            # Check cancellation after parallel query generation
+            self._check_cancellation(job_id)
+
             # Process query results
             all_queries_by_fact = {}
             for result in query_results:
@@ -299,6 +302,9 @@ class WebSearchOrchestrator:
 
             search_tasks = [search_for_fact(fact) for fact in facts]
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+            # Check cancellation after parallel searches
+            self._check_cancellation(job_id)
 
             # Process search results
             search_results_by_fact = {}
@@ -372,6 +378,9 @@ class WebSearchOrchestrator:
             filter_tasks = [filter_sources_for_fact(fact) for fact in facts]
             filter_results = await asyncio.gather(*filter_tasks, return_exceptions=True)
 
+            # Check cancellation after parallel filtering
+            self._check_cancellation(job_id)
+
             # Process filter results
             credible_urls_by_fact = {}
             credibility_results_by_fact = {}
@@ -415,8 +424,15 @@ class WebSearchOrchestrator:
                         url_to_fact_map[url] = []
                     url_to_fact_map[url].append(fact.id)
 
+            # Check cancellation before starting scraping
+            self._check_cancellation(job_id)
+
             # Scrape all URLs at once (browser pool handles concurrency)
-            all_scraped_content = await scraper.scrape_urls_for_facts(all_urls_to_scrape)
+            # Pass cancel_check so scraper can abort mid-batch
+            all_scraped_content = await scraper.scrape_urls_for_facts(
+                all_urls_to_scrape,
+                cancel_check=lambda: self._check_cancellation(job_id)
+            )
 
             # Organize scraped content by fact
             scraped_content_by_fact = {}
@@ -446,6 +462,9 @@ class WebSearchOrchestrator:
                 job_id, 
                 f"Scraped {successful_scrapes}/{len(all_urls_to_scrape)} sources in {scrape_duration:.1f}s"
             )
+
+            # Check cancellation after scraping
+            self._check_cancellation(job_id)
 
             # Build fact search audits
             for fact in facts:
@@ -521,6 +540,9 @@ class WebSearchOrchestrator:
 
             verify_tasks = [verify_single_fact(fact) for fact in facts]
             results = await asyncio.gather(*verify_tasks, return_exceptions=True)
+
+            # Check cancellation after parallel verification
+            self._check_cancellation(job_id)
 
             # Process verification results
             final_results = []
