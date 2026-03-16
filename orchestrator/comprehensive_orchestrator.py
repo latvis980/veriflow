@@ -332,6 +332,8 @@ class ComprehensiveOrchestrator:
 
             metadata_blocks.append(sv_block)
 
+            self._check_cancellation(job_id)
+
             # =================================================================
             # Step 1c: (Future checks go here)
             # Each new check:
@@ -575,6 +577,9 @@ class ComprehensiveOrchestrator:
             # asyncio.gather runs all tasks concurrently.
             # return_exceptions=True ensures one mode failing doesn't cancel the rest.
             raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Check cancellation immediately after parallel execution completes
+            self._check_cancellation(job_id)
 
         finally:
             # =============================================================

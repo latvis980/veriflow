@@ -130,7 +130,10 @@ class LLMInterpretationOrchestrator:
             )
             self._check_cancellation(job_id)
 
-            all_scraped_content = await self.scraper.scrape_urls_for_facts(unique_urls)
+            all_scraped_content = await self.scraper.scrape_urls_for_facts(
+                unique_urls,
+                cancel_check=lambda: self._check_cancellation(job_id)
+            )
             successful_scrapes = len([v for v in all_scraped_content.values() if v])
 
             # Capture per-URL failure reasons from scraper
@@ -156,6 +159,9 @@ class LLMInterpretationOrchestrator:
                 job_id,
                 f"Scraped {successful_scrapes}/{len(unique_urls)} cited sources"
             )
+
+            # Check cancellation after scraping
+            self._check_cancellation(job_id)
 
             # ================================================================
             # Step 4: Verify claims (PARALLEL with concurrency limit)
@@ -256,6 +262,9 @@ class LLMInterpretationOrchestrator:
 
             # return_exceptions=True so one failure does not kill the batch
             raw_results = await asyncio.gather(*verification_tasks, return_exceptions=True)
+
+            # Check cancellation after parallel verification
+            self._check_cancellation(job_id)
 
             # Handle any unexpected exceptions that slipped through
             from agents.llm_output_verifier import LLMVerificationResult

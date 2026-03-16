@@ -403,12 +403,14 @@ class BrowserlessScraper:
         # Combine with generic selectors
         return site_selectors + GENERIC_SELECTORS
 
-    async def scrape_urls_for_facts(self, urls: List[str]) -> Dict[str, str]:
+    async def scrape_urls_for_facts(self, urls: List[str], cancel_check=None) -> Dict[str, str]:
         """
         Scrape multiple URLs with persistent browser sessions and AI cleaning.
 
         Args:
             urls: List of URLs to scrape
+            cancel_check: Optional callable that raises an exception if cancelled.
+                          Called before scraping starts and after results are collected.
 
         Returns:
             Dict mapping URL to scraped (and cleaned) content
@@ -425,9 +427,17 @@ class BrowserlessScraper:
             extra={"url_count": len(urls), "replica_id": self.replica_id}
         )
 
+        # Check for cancellation before starting browser initialization
+        if cancel_check:
+            cancel_check()
+
         await self._initialize_browser_pool(min_browsers=num_browsers_needed)
 
         try:
+            # Check for cancellation after browser initialization
+            if cancel_check:
+                cancel_check()
+
             # Guard: If no browsers initialized, return empty results
             if not self.browser_pool:
                 fact_logger.logger.error(
@@ -444,6 +454,10 @@ class BrowserlessScraper:
             ]
 
             results_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Check for cancellation after all scrapes complete
+            if cancel_check:
+                cancel_check()
 
             # Convert to dict and handle exceptions
             results = {}

@@ -339,6 +339,9 @@ class ManipulationOrchestrator:
                 extra={"num_facts": len(facts), "duration": verification_duration}
             )
 
+            # Check cancellation after parallel verification
+            self._check_cancellation(job_id)
+
             # Process results from parallel execution
             verification_results: Dict[str, Dict[str, Any]] = {}
             source_excerpts_by_fact: Dict[str, str] = {}
@@ -410,6 +413,9 @@ class ManipulationOrchestrator:
                 f" Parallel manipulation analysis completed in {manipulation_duration:.1f}s",
                 extra={"num_facts": len(facts), "duration": manipulation_duration}
             )
+
+            # Check cancellation after parallel manipulation analysis
+            self._check_cancellation(job_id)
 
             # Process manipulation results
             manipulation_findings: List[ManipulationFinding] = []
@@ -686,6 +692,8 @@ class ManipulationOrchestrator:
             if not queries or not queries.primary_query:
                 return self._empty_verification("Failed to generate search queries"), "", []
 
+            self._check_cancellation(job_id)
+
             # Step 2: Execute web searches
             search_results = await self.brave_searcher.search_multiple(
                 queries=queries.all_queries,
@@ -726,6 +734,8 @@ class ManipulationOrchestrator:
             if not all_search_results:
                 return self._empty_verification("No search results found"), "", query_audits
 
+            self._check_cancellation(job_id)
+
             # Step 3: Filter by credibility
             cred_results = await self.credibility_filter.evaluate_sources(
                 fact=fact_obj,
@@ -737,14 +747,21 @@ class ManipulationOrchestrator:
             if not credible_urls:
                 return self._empty_verification("No credible sources found"), "", query_audits
 
+            self._check_cancellation(job_id)
+
             source_metadata = cred_results.source_metadata if cred_results else {}
 
             # Step 4: Scrape sources
             urls_to_scrape = credible_urls[:self.max_sources_per_fact]
-            scraped_content = await self.scraper.scrape_urls_for_facts(urls_to_scrape)
+            scraped_content = await self.scraper.scrape_urls_for_facts(
+                urls_to_scrape,
+                cancel_check=lambda: self._check_cancellation(job_id)
+            )
 
             if not scraped_content or not any(scraped_content.values()):
                 return self._empty_verification("Failed to scrape sources"), "", query_audits
+
+            self._check_cancellation(job_id)
 
             # Step 5: Extract excerpts
             all_excerpts: List[Dict[str, Any]] = []
@@ -819,6 +836,9 @@ class ManipulationOrchestrator:
             }
 
             return result, formatted_excerpts, query_audits
+
+        except CancelledException:
+            raise  # Re-raise cancellation to stop parallel tasks
 
         except Exception as e:
             fact_logger.logger.error(f" Fact verification failed: {e}")

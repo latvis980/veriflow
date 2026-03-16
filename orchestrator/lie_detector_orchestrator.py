@@ -187,7 +187,7 @@ class LieDetectorOrchestrator:
                 credibility_context=credibility_context  # NEW: Pass context
             )
 
-            self._check_cancellation_safe(job_id)
+            self._check_cancellation_safe()
 
             # Step 2: Prepare report data
             fact_logger.logger.info("📝 Step 2: Preparing analysis report")
@@ -210,7 +210,7 @@ class LieDetectorOrchestrator:
                 }
             }
 
-            self._check_cancellation_safe(job_id)
+            self._check_cancellation_safe()
 
             # Step 3: Save reports locally
             fact_logger.logger.info("💾 Step 3: Saving reports locally")
@@ -222,7 +222,7 @@ class LieDetectorOrchestrator:
             )
             fact_logger.logger.info(f"✅ Saved analysis report: {analysis_report_path}")
 
-            self._check_cancellation_safe(job_id)
+            self._check_cancellation_safe()
 
             # Step 4: Upload to R2 if enabled
             r2_upload_status = {"success": False, "error": "R2 disabled"}
