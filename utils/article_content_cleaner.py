@@ -118,13 +118,27 @@ class CleaningResult(BaseModel):
 SYSTEM_PROMPT = """You are an expert at extracting clean article content from noisy web page scrapes.
 
 ## YOUR TASK
-Given raw scraped content from a news article, extract ONLY the actual journalism:
-- The headline/title
-- The byline (author name, date)
-- The article body paragraphs
-- Relevant quotes and attributions
+Given raw scraped content from a news article, extract ONLY the actual journalism.
+You must COPY the original text VERBATIM — do NOT rewrite, paraphrase, summarize, or alter the wording in any way.
 
-## NOISE TO REMOVE (ignore completely)
+Your job is strictly to REMOVE noise while PRESERVING the article text exactly as written.
+
+## CRITICAL RULE: PRESERVE ORIGINAL TEXT EXACTLY
+- The `body` field MUST contain the article paragraphs COPIED WORD-FOR-WORD from the input
+- Do NOT rephrase, summarize, condense, or rewrite ANY sentence
+- Do NOT add any text that is not in the original content
+- Do NOT change word order, vocabulary, or sentence structure
+- If in doubt whether something is article content or noise, KEEP IT
+- Think of yourself as a highlighter, not a writer — you highlight what to keep, you do not write new text
+
+## WHAT TO KEEP (copy verbatim)
+- The headline/title (exact wording)
+- The byline (author name, date)
+- ALL article body paragraphs (exact wording, every paragraph)
+- All quotes and attributions (exact wording)
+- Image captions that add context
+
+## NOISE TO REMOVE (skip these entirely)
 
 ### Subscription/Access Noise
 - "Subscribe to read more", "Sign in to continue"
@@ -176,11 +190,11 @@ Given raw scraped content from a news article, extract ONLY the actual journalis
 
 ## EXTRACTION RULES
 
-1. **Title**: Extract the main headline - usually the most prominent text at the start
-2. **Subtitle**: If there's a deck/subtitle under the headline, include it
-3. **Author**: Look for "By [Name]" pattern near the top
-4. **Date**: Look for publication date near byline
-5. **Body**: Extract all substantive paragraphs that form the article narrative
+1. **Title**: Copy the main headline exactly as written
+2. **Subtitle**: Copy the deck/subtitle exactly if present
+3. **Author**: Copy the byline exactly as found
+4. **Date**: Copy the publication date exactly as found
+5. **Body**: Copy ALL substantive article paragraphs VERBATIM, preserving their original order and wording
 
 ## CONTENT QUALITY CHECKS
 
@@ -190,14 +204,14 @@ Given raw scraped content from a news article, extract ONLY the actual journalis
 
 ## OUTPUT FORMAT
 
-Return valid JSON with the CleanedArticle structure. The `body` field should contain 
-the clean article text with paragraphs separated by double newlines.
+Return valid JSON with the CleanedArticle structure. The `body` field should contain
+the original article text VERBATIM with paragraphs separated by double newlines.
 
-Be aggressive about removing noise - if in doubt, leave it out. The goal is clean, 
-readable journalism without any web page cruft."""
+Be aggressive about removing noise, but NEVER alter the article text itself. The goal is
+the original journalism text without any web page cruft."""
 
 
-USER_PROMPT = """Clean this scraped article content. Extract only the actual journalism.
+USER_PROMPT = """Clean this scraped article content. Remove web noise but PRESERVE all article text EXACTLY as written — do NOT rewrite, paraphrase, or summarize.
 
 URL: {url}
 Domain: {domain}
@@ -207,12 +221,14 @@ RAW SCRAPED CONTENT:
 {content}
 ---
 
-Extract the clean article and return JSON with:
-- title: Main headline
+IMPORTANT: Copy the article text WORD-FOR-WORD. Do not change any wording. Only remove non-article noise (navigation, ads, subscription prompts, etc.).
+
+Return JSON with:
+- title: Main headline (exact wording from article)
 - subtitle: Subtitle/deck if present (null if none)
 - author: Author name(s) (null if not found)
 - publication_date: Date string as found (null if not found)
-- body: Clean article text (paragraphs separated by \\n\\n)
+- body: Article text COPIED VERBATIM from the original (paragraphs separated by \\n\\n)
 - lead_paragraph: Opening paragraph if distinct (null if not)
 - image_captions: List of relevant captions (empty list if none)
 - word_count: Word count of body
