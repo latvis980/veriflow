@@ -29,6 +29,7 @@ import time
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+from urllib.parse import urlparse
 
 from utils.logger import fact_logger
 from utils.langsmith_config import langsmith_config
@@ -153,6 +154,24 @@ class ManipulationOrchestrator:
             fact_logger.logger.info(f" Job {job_id} was cancelled")
             raise CancelledException(f"Job {job_id} was cancelled by user")
 
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        """Normalize a URL for comparison (strip trailing slash, fragment, lowercase)."""
+        parsed = urlparse(url.lower().strip())
+        path = parsed.path.rstrip('/')
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+    @staticmethod
+    def _filter_source_url_from_results(results: list, source_url: str) -> list:
+        """Remove search results that match the source URL being fact-checked."""
+        normalized_source = ManipulationOrchestrator._normalize_url(source_url)
+        filtered = []
+        for r in results:
+            result_url = r.get('url', '') if isinstance(r, dict) else getattr(r, 'url', '')
+            if ManipulationOrchestrator._normalize_url(result_url) != normalized_source:
+                filtered.append(r)
+        return filtered
+
     def _generate_session_id(self) -> str:
         """Generate unique session ID"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -172,7 +191,8 @@ class ManipulationOrchestrator:
         source_info: str = "Unknown source",
         source_credibility: Optional[Dict[str, Any]] = None,
         standalone: bool = True,
-        shared_scraper=None
+        shared_scraper=None,
+        source_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Run the full manipulation detection pipeline with progress updates
@@ -321,7 +341,8 @@ class ManipulationOrchestrator:
                     fact_index=i,
                     total_facts=len(facts),
                     job_id=job_id,
-                    article_summary=article_summary
+                    article_summary=article_summary,
+                    source_url=source_url
                 )
                 for i, fact in enumerate(facts, 1)
             ]
@@ -553,7 +574,8 @@ class ManipulationOrchestrator:
         fact_index: int,
         total_facts: int,
         job_id: str,
-        article_summary: ArticleSummary
+        article_summary: ArticleSummary,
+        source_url: Optional[str] = None
     ) -> VerificationResultTuple:
         """
         Verify a single fact - designed for parallel execution with asyncio.gather()
@@ -564,6 +586,7 @@ class ManipulationOrchestrator:
             total_facts: Total number of facts being verified
             job_id: Job ID for progress tracking
             article_summary: Article context for query generation
+            source_url: Optional URL of the article being fact-checked (excluded from search results)
 
         Returns:
             Tuple of (fact_id, verification_result, excerpts, query_audits, error_message)
@@ -582,7 +605,8 @@ class ManipulationOrchestrator:
             verification, excerpts, query_audits = await self._verify_fact(
                 fact=fact,
                 job_id=job_id,
-                article_summary=article_summary
+                article_summary=article_summary,
+                source_url=source_url
             )
 
             # Log completion with score
@@ -667,7 +691,8 @@ class ManipulationOrchestrator:
         self,
         fact: ExtractedFact,
         job_id: str,
-        article_summary: ArticleSummary
+        article_summary: ArticleSummary,
+        source_url: Optional[str] = None
     ) -> Tuple[Dict[str, Any], str, List]:
         """
         Verify a single fact using the existing fact-checking pipeline
@@ -700,6 +725,20 @@ class ManipulationOrchestrator:
                 search_depth="advanced",
                 max_concurrent=3  #  Can be aggressive with paid Brave account
             )
+
+            # Filter out the source URL to avoid verifying facts against the original article
+            if source_url:
+                filtered_out = 0
+                for query, brave_results in search_results.items():
+                    original_count = len(brave_results.results)
+                    brave_results.results = self._filter_source_url_from_results(
+                        brave_results.results, source_url
+                    )
+                    filtered_out += original_count - len(brave_results.results)
+                if filtered_out > 0:
+                    fact_logger.logger.info(
+                        f"Excluded {filtered_out} results matching source URL: {source_url}"
+                    )
 
             # Build query audits
             for query, brave_results in search_results.items():

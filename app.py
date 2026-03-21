@@ -665,6 +665,9 @@ def check_manipulation():
         content = request_json.get('content') or request_json.get('text')
         source_info = request_json.get('source_info', 'Unknown source')
 
+        # Extract source_url for filtering: use source_info if it looks like a URL
+        source_url = source_info if source_info.startswith(('http://', 'https://')) else None
+
         # NEW: Accept pre-fetched credibility data
         source_credibility = request_json.get('source_credibility')
 
@@ -693,7 +696,7 @@ def check_manipulation():
         # Start background processing with source_credibility
         threading.Thread(
             target=run_manipulation_task,
-            args=(job_id, content, source_info, source_credibility),  # UPDATED
+            args=(job_id, content, source_info, source_credibility, source_url),  # UPDATED
             daemon=True
         ).start()
 
@@ -761,10 +764,11 @@ def run_lie_detection_task(
         cleanup_thread_loop()
 
 def run_manipulation_task(
-    job_id: str, 
-    content: str, 
+    job_id: str,
+    content: str,
     source_info: str,
-    source_credibility: Optional[Dict] = None  # NEW PARAMETER
+    source_credibility: Optional[Dict] = None,
+    source_url: Optional[str] = None
 ):
     """
     Background task runner for manipulation detection.
@@ -773,7 +777,8 @@ def run_manipulation_task(
         job_id: Job ID for tracking
         content: Article text to analyze
         source_info: URL or source name
-        source_credibility: Optional pre-fetched credibility data (NEW)
+        source_credibility: Optional pre-fetched credibility data
+        source_url: Optional URL of the article being fact-checked (excluded from search results)
     """
     try:
         if manipulation_orchestrator is None:
@@ -783,7 +788,8 @@ def run_manipulation_task(
             f" Job {job_id}: Starting manipulation detection",
             extra={
                 "source_info": source_info,
-                "has_credibility": source_credibility is not None
+                "has_credibility": source_credibility is not None,
+                "has_source_url": source_url is not None
             }
         )
 
@@ -792,7 +798,8 @@ def run_manipulation_task(
                 content=content,
                 job_id=job_id,
                 source_info=source_info,
-                source_credibility=source_credibility
+                source_credibility=source_credibility,
+                source_url=source_url
             )
         )
 

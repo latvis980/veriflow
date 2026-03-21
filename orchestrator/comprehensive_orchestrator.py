@@ -466,7 +466,8 @@ class ComprehensiveOrchestrator:
                     source_info=source_credibility.get("domain", "Unknown"),
                     source_credibility=source_credibility if source_credibility else None,
                     standalone=False,  # Prevent overwriting comprehensive result
-                    shared_scraper=shared_scraper  # Phase 3: shared URL cache
+                    shared_scraper=shared_scraper,  # Phase 3: shared URL cache
+                    source_url=source_url  # Exclude original article from search results
                 )
                 return (mode_id, result, None)
 
