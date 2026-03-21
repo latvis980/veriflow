@@ -194,6 +194,16 @@ SITE_SELECTORS = {
         '.article-content',
         '[class*="article-text"]',
     ],
+    'cnbc.com': [
+        '.ArticleBody-articleBody',
+        '[data-module="ArticleBody"]',
+        '[data-testid="ArticleBody"]',
+        '.FeaturedContent-articleBody',
+        '.RenderKeyPoints-list',
+        '[class*="ArticleBody"]',
+        '.group > [class*="body"]',
+        'article',
+    ],
 }
 
 # Generic fallback selectors (used if no site-specific match)
@@ -1086,6 +1096,9 @@ class BrowserlessScraper:
             if strategy == ScrapingStrategy.ADVANCED:
                 await self._simulate_human_behavior(page)
 
+            # NEW: Dismiss cookie consent / GDPR overlays before extraction
+            await self._dismiss_consent_overlays(page)
+
             # Shared extraction + cleaning pipeline
             content = await self._extract_and_clean_content(page, url)
 
@@ -1615,6 +1628,76 @@ class BrowserlessScraper:
 
         except Exception as e:
             fact_logger.logger.debug(f"Human behavior simulation error: {e}")
+
+    async def _dismiss_consent_overlays(self, page: Page):
+        """Try to dismiss cookie consent banners and GDPR overlays."""
+        try:
+            # Common consent button selectors
+            consent_selectors = [
+                'button[id*="accept"]',
+                'button[class*="accept"]',
+                'button[data-testid*="accept"]',
+                '[class*="consent"] button',
+                '[id*="consent"] button',
+                '#onetrust-accept-btn-handler',
+                '.onetrust-accept-btn-handler',
+                'button[title="Accept"]',
+                'button[title="Accept All"]',
+                'button[title="I Accept"]',
+                'button[aria-label="Accept"]',
+                'button[aria-label="Accept All Cookies"]',
+                '[class*="cookie"] button[class*="accept"]',
+                '[class*="gdpr"] button',
+                '.fc-cta-consent',  # Funding Choices
+                '#didomi-notice-agree-button',
+                '.css-1fzhd9j',  # CNBC specific consent
+                'button[class*="Consent"]',
+            ]
+
+            for selector in consent_selectors:
+                try:
+                    btn = await page.query_selector(selector)
+                    if btn:
+                        is_visible = await btn.is_visible()
+                        if is_visible:
+                            await btn.click()
+                            fact_logger.logger.debug(
+                                f"Clicked consent button: {selector}"
+                            )
+                            await asyncio.sleep(0.5)
+                            break
+                except Exception:
+                    continue
+
+            # Remove any remaining overlays via JS
+            await page.evaluate("""
+                () => {
+                    const overlaySelectors = [
+                        '[class*="consent"]',
+                        '[id*="consent"]',
+                        '[class*="cookie-banner"]',
+                        '[id*="cookie-banner"]',
+                        '[class*="gdpr"]',
+                        '#onetrust-banner-sdk',
+                        '.onetrust-pc-dark-filter',
+                        '[class*="overlay"][style*="position: fixed"]',
+                    ];
+                    overlaySelectors.forEach(sel => {
+                        try {
+                            document.querySelectorAll(sel).forEach(el => {
+                                if (!el.closest('article') && !el.closest('main')) {
+                                    el.remove();
+                                }
+                            });
+                        } catch (e) {}
+                    });
+                    // Restore scrolling
+                    document.body.style.overflow = 'auto';
+                    document.documentElement.style.overflow = 'auto';
+                }
+            """)
+        except Exception as e:
+            fact_logger.logger.debug(f"Consent dismissal error (non-critical): {e}")
 
     async def _block_resources(self, route):
         """Block unnecessary resources for faster loading"""
