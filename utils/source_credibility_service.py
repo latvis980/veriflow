@@ -241,17 +241,53 @@ class SourceCredibilityService:
                 fact_logger.logger.warning(f" {domain} is flagged as propaganda source")
                 return result
 
-        # Step 3: Run MBFC lookup if enabled and requested
-        if run_mbfc_if_missing and self.mbfc_enabled:
-            mbfc_result = await self._run_mbfc_lookup(domain)
-            if mbfc_result:
-                result = mbfc_result
-                result.url = url
-                self.cache[domain] = result
-                fact_logger.logger.info(
-                    f"MBFC lookup complete for {domain} (Tier {result.credibility_tier})"
+        # Step 3: MBFC lookup
+        # Strategy: check if MBFC service is available for background lookup.
+        # If so, fire-and-forget (don't block the pipeline).
+        # If not, fall back to inline lookup (old behavior).
+        if run_mbfc_if_missing:
+            # Option A: Offload to dedicated MBFC service (preferred - non-blocking)
+            try:
+                from utils.mbfc_service_client import (
+                    is_mbfc_service_configured,
+                    request_mbfc_lookup,
                 )
-                return result
+
+                if is_mbfc_service_configured():
+                    # Fire-and-forget: MBFC service will scrape and save to Supabase.
+                    # Next time this domain is checked, Supabase will have the data.
+                    await request_mbfc_lookup(domain=domain)
+                    fact_logger.logger.info(
+                        f"Requested background MBFC lookup for {domain} "
+                        f"(returning tier 3 default for now)"
+                    )
+                    # Fall through to Step 4 (default tier 3)
+
+                elif self.mbfc_enabled:
+                    # Option B: Inline lookup (old behavior, blocks pipeline)
+                    mbfc_result = await self._run_mbfc_lookup(domain)
+                    if mbfc_result:
+                        result = mbfc_result
+                        result.url = url
+                        self.cache[domain] = result
+                        fact_logger.logger.info(
+                            f"MBFC lookup complete for {domain} "
+                            f"(Tier {result.credibility_tier})"
+                        )
+                        return result
+            except ImportError:
+                # mbfc_service_client not available, try inline
+                if self.mbfc_enabled:
+                    mbfc_result = await self._run_mbfc_lookup(domain)
+                    if mbfc_result:
+                        result = mbfc_result
+                        result.url = url
+                        self.cache[domain] = result
+                        fact_logger.logger.info(
+                            f"MBFC lookup complete for {domain} "
+                            f"(Tier {result.credibility_tier})"
+                        )
+                        return result
 
         # Step 4: Fallback - return default tier 3 (unknown)
         result.source = "fallback"
