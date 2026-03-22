@@ -357,14 +357,10 @@ class BiasCheckOrchestrator:
                     ]
 
                     for filename, filepath in uploads:
-                        with open(filepath, 'r') as f:
-                            content = f.read()
-
                         r2_key = f"bias-reports/{session_id}/{filename}"
-                        url = self.r2_uploader.upload_text(
-                            content=content,
-                            key=r2_key,
-                            content_type="application/json"
+                        url = self.r2_uploader.upload_file(
+                            file_path=filepath,
+                            r2_filename=r2_key
                         )
 
                         if url:
