@@ -67,7 +67,7 @@ class ScrapeCache:
             fact_logger.logger.info("ScrapeCache: BrowserlessScraper created")
         return self._scraper
 
-    async def scrape_urls_for_facts(self, urls: List[str], cancel_check=None) -> Dict[str, str]:
+    async def scrape_urls_for_facts(self, urls: List[str]) -> Dict[str, str]:
         """
         Scrape URLs, returning cached results where available.
 
@@ -80,8 +80,6 @@ class ScrapeCache:
 
         Args:
             urls: List of URLs to scrape
-            cancel_check: Optional callable that raises an exception if cancelled.
-                          Passed through to the underlying BrowserlessScraper.
 
         Returns:
             Dict mapping URL -> scraped content (only URLs with content)
@@ -121,17 +119,10 @@ class ScrapeCache:
                 f"being scraped by another mode"
             )
             for url, event in events_to_wait.items():
-                # Check cancellation while waiting for other tasks
-                if cancel_check:
-                    cancel_check()
                 await event.wait()
                 # After event fires, check if content is now in cache
                 if url in self._cache:
                     results[url] = self._cache[url]
-
-        # Check cancellation before starting new scrapes
-        if cancel_check:
-            cancel_check()
 
         # Phase 3: Scrape the genuinely new URLs
         if urls_to_scrape:
@@ -141,7 +132,7 @@ class ScrapeCache:
             )
 
             scraper = await self._get_scraper()
-            scraped = await scraper.scrape_urls_for_facts(urls_to_scrape, cancel_check=cancel_check)
+            scraped = await scraper.scrape_urls_for_facts(urls_to_scrape)
 
             # Merge failure reasons from this scrape batch
             if hasattr(scraper, 'url_failure_reasons'):

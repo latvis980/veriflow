@@ -1,7 +1,7 @@
 # agents/key_claims_extractor.py
 """
 Key Claims Extractor Agent - ENHANCED VERSION
-Extracts up to 5 key claims from text PLUS content analysis
+Extracts the 2-3 central thesis claims from text PLUS content analysis
 
 ENHANCEMENTS:
 - Uses GPT-4o for more nuanced analysis
@@ -19,7 +19,6 @@ from langsmith import traceable
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import time
-from datetime import datetime
 
 from prompts.key_claims_extractor_prompts import get_key_claims_prompts
 from utils.logger import fact_logger
@@ -97,7 +96,7 @@ class QueryInstructions(BaseModel):
 
 class KeyClaimsOutput(BaseModel):
     """Complete output from key claims extraction"""
-    facts: List[dict] = Field(description="List of up to 5 key claims")
+    facts: List[dict] = Field(description="List of 2-3 key claims")
     all_sources: List[str] = Field(description="All source URLs mentioned")
     content_location: Optional[dict] = Field(default=None, description="Country and language info")
     # NEW FIELDS
@@ -123,7 +122,7 @@ class KeyClaimsResult(BaseModel):
 
 class KeyClaimsExtractor:
     """
-    Extract up to 5 key claims (central thesis + supporting facts) from text
+    Extract the 2-3 key claims (central thesis) from text
     PLUS content analysis for smarter query generation
     
     Uses GPT-4o for more nuanced analysis.
@@ -147,13 +146,13 @@ class KeyClaimsExtractor:
         fact_logger.log_component_start(
             "KeyClaimsExtractor",
             model="gpt-4o",  # Updated
-            max_claims=5
+            max_claims=3
         )
 
     @traceable(name="key_claims_extraction")
     async def extract(self, parsed_content: dict) -> tuple[List[KeyClaim], List[str], ContentLocation, BroadContext, List[str], QueryInstructions]:
         """
-        Extract up to 5 key claims from parsed content with full analysis
+        Extract 2-3 key claims from parsed content with full analysis
         
         Args:
             parsed_content: Dict with 'text', 'links', 'format' keys
@@ -217,12 +216,8 @@ class KeyClaimsExtractor:
             ("user", user_prompt + "\n\n{format_instructions}\n\nReturn your response as valid JSON.")
         ])
 
-        # Inject current date awareness and format instructions as partial variables
-        now = datetime.now()
         prompt_with_format = prompt.partial(
-            format_instructions=self.parser.get_format_instructions(),
-            current_date=now.strftime("%B %d, %Y"),
-            current_year=str(now.year)
+            format_instructions=self.parser.get_format_instructions()
         )
 
         callbacks = langsmith_config.get_callbacks("key_claims_extractor")
@@ -453,7 +448,7 @@ class KeyClaimsExtractor:
         return "\n".join(formatted)
 
     def _deduplicate_and_rank_claims(self, claims: List[KeyClaim]) -> List[KeyClaim]:
-        """Remove duplicate claims and keep top 5 by confidence"""
+        """Remove duplicate claims and keep top 2-3 by confidence"""
         # Simple deduplication by statement similarity
         seen = set()
         unique = []
@@ -464,9 +459,9 @@ class KeyClaimsExtractor:
                 seen.add(normalized)
                 unique.append(claim)
 
-        # Sort by confidence and keep top 5
+        # Sort by confidence and keep top 3
         unique.sort(key=lambda c: c.confidence, reverse=True)
-        return unique[:5]
+        return unique[:3]
 
     def _aggregate_location_votes(self, votes: List[ContentLocation]) -> ContentLocation:
         """Combine location votes from multiple chunks"""

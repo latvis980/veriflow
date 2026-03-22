@@ -1,7 +1,7 @@
 # orchestrator/key_claims_orchestrator.py
 """
 Key Claims Orchestrator - WITH PARALLEL PROCESSING
-Extracts and verifies up to 5 key claims from text
+Extracts and verifies ONLY the 2-3 central thesis claims from text
 
 OPTIMIZED: Full parallel processing for all stages
    - Parallel query generation
@@ -12,7 +12,7 @@ OPTIMIZED: Full parallel processing for all stages
    - ~60-70% faster than sequential processing
 
 Pipeline:
-1. Extract up to 5 key claims (central thesis + supporting facts)
+1. Extract 2-3 key claims (central thesis statements)
 2. Generate search queries for each key claim (PARALLEL)
 3. Execute web searches via Brave (PARALLEL)
 4. Filter results by source credibility (PARALLEL)
@@ -25,7 +25,6 @@ Pipeline:
 from langsmith import traceable
 import time
 import asyncio
-from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional, Tuple
 
 from utils.logger import fact_logger
@@ -117,25 +116,6 @@ class KeyClaimsOrchestrator:
         run_type="chain",
         tags=["key-claims", "thesis-verification", "parallel"]
     )
-    @staticmethod
-    def _normalize_url(url: str) -> str:
-        """Normalize a URL for comparison (strip trailing slash, fragment, lowercase)."""
-        parsed = urlparse(url.lower().strip())
-        # Rebuild without fragment, strip trailing slash from path
-        path = parsed.path.rstrip('/')
-        return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-    @staticmethod
-    def _filter_source_url_from_results(results: list, source_url: str) -> list:
-        """Remove search results that match the source URL being fact-checked."""
-        normalized_source = KeyClaimsOrchestrator._normalize_url(source_url)
-        filtered = []
-        for r in results:
-            result_url = r.get('url', '') if isinstance(r, dict) else getattr(r, 'url', '')
-            if KeyClaimsOrchestrator._normalize_url(result_url) != normalized_source:
-                filtered.append(r)
-        return filtered
-
     async def process_with_progress(
         self,
         text_content: str,
@@ -143,8 +123,7 @@ class KeyClaimsOrchestrator:
         source_context: Optional[Dict[str, Any]] = None,
         source_credibility: Optional[Dict[str, Any]] = None,
         standalone: bool = True,
-        shared_scraper=None,
-        source_url: Optional[str] = None
+        shared_scraper=None
     ) -> dict:
         """
         Complete key claims verification pipeline with parallel processing
@@ -160,9 +139,6 @@ class KeyClaimsOrchestrator:
             shared_scraper: Optional shared ScrapeCache from comprehensive mode.
                            If provided, uses it instead of creating a new scraper.
                            The caller is responsible for closing it.
-            source_url: Optional URL of the article being fact-checked.
-                       Results from this URL will be excluded from Brave search
-                       to avoid verifying facts against the original source.
         """
         session_id = self.file_manager.create_session()
         # Track credibility usage
@@ -314,9 +290,6 @@ class KeyClaimsOrchestrator:
             query_tasks = [generate_queries_for_claim(claim) for claim in claims]
             query_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
-            # Check cancellation after parallel query generation
-            self._check_cancellation(job_id)
-
             # Process query results
             all_queries_by_claim = {}
             freshness_by_claim = {}
@@ -374,9 +347,6 @@ class KeyClaimsOrchestrator:
             search_tasks = [search_for_claim(claim) for claim in claims]
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-            # Check cancellation after parallel searches
-            self._check_cancellation(job_id)
-
             # Process search results
             search_results_by_claim = {}
             query_audits_by_claim = {}
@@ -393,26 +363,8 @@ class KeyClaimsOrchestrator:
                     total_results += len(brave_results.results)
 
             search_duration = time.time() - search_start
-
-            # Filter out the source URL from search results to avoid
-            # verifying facts against the article being fact-checked
-            if source_url:
-                filtered_out = 0
-                for claim_id, search_results in search_results_by_claim.items():
-                    for query, brave_results in search_results.items():
-                        original_count = len(brave_results.results)
-                        brave_results.results = self._filter_source_url_from_results(
-                            brave_results.results, source_url
-                        )
-                        filtered_out += original_count - len(brave_results.results)
-                if filtered_out > 0:
-                    total_results -= filtered_out
-                    fact_logger.logger.info(
-                        f"Excluded {filtered_out} results matching source URL: {source_url}"
-                    )
-
             job_manager.add_progress(
-                job_id,
+                job_id, 
                 f"Found {total_results} potential sources in {search_duration:.1f}s"
             )
 
@@ -454,9 +406,6 @@ class KeyClaimsOrchestrator:
 
             filter_tasks = [filter_sources_for_claim(claim) for claim in claims]
             filter_results = await asyncio.gather(*filter_tasks, return_exceptions=True)
-
-            # Check cancellation after parallel filtering
-            self._check_cancellation(job_id)
 
             # Process filter results
             credible_urls_by_claim = {}
@@ -503,15 +452,8 @@ class KeyClaimsOrchestrator:
                         url_to_claim_map[url] = []
                     url_to_claim_map[url].append(claim.id)
 
-            # Check cancellation before starting scraping
-            self._check_cancellation(job_id)
-
             # Scrape all URLs at once (browser pool handles concurrency)
-            # Pass cancel_check so scraper can abort mid-batch
-            all_scraped_content = await scraper.scrape_urls_for_facts(
-                all_urls_to_scrape,
-                cancel_check=lambda: self._check_cancellation(job_id)
-            )
+            all_scraped_content = await scraper.scrape_urls_for_facts(all_urls_to_scrape)
 
             # Organize scraped content by claim
             scraped_content_by_claim = {}
@@ -541,9 +483,6 @@ class KeyClaimsOrchestrator:
                 job_id, 
                 f"Scraped {successful_scrapes}/{len(all_urls_to_scrape)} sources in {scrape_duration:.1f}s"
             )
-
-            # Check cancellation after scraping
-            self._check_cancellation(job_id)
 
             # Build claim search audits
             for claim in claims:
@@ -619,9 +558,6 @@ class KeyClaimsOrchestrator:
 
             verify_tasks = [verify_single_claim(claim) for claim in claims]
             results = await asyncio.gather(*verify_tasks, return_exceptions=True)
-
-            # Check cancellation after parallel verification
-            self._check_cancellation(job_id)
 
             # Process verification results
             final_results = []

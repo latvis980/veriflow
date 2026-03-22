@@ -277,7 +277,7 @@ const Index = () => {
                   )}
                 </div>
 
-                <ReportRenderer mode={analyzedMode} data={result} onReset={fullReset} sourceUrl={url || undefined} publicationName={article?.publication_name} />
+                <ReportRenderer mode={analyzedMode} data={result} onReset={fullReset} sourceUrl={url || undefined} />
               </>
             )}
           </div>

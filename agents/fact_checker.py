@@ -15,7 +15,6 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any
 import time
-from datetime import datetime
 
 from utils.logger import fact_logger
 from utils.langsmith_config import langsmith_config
@@ -339,12 +338,8 @@ Examples:
             ("user", self.prompts["user"] + "\n\n{format_instructions}\n\nReturn your response as valid JSON.")
         ])
 
-        # Inject current date awareness and format instructions as partial variables
-        now = datetime.now()
         prompt_with_format = prompt.partial(
-            format_instructions=self.parser.get_format_instructions(),
-            current_date=now.strftime("%B %d, %Y"),
-            current_year=str(now.year)
+            format_instructions=self.parser.get_format_instructions()
         )
 
         callbacks = langsmith_config.get_callbacks(f"fact_checker_{fact.id}")

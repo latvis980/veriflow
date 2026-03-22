@@ -29,7 +29,6 @@ import time
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
-from urllib.parse import urlparse
 
 from utils.logger import fact_logger
 from utils.langsmith_config import langsmith_config
@@ -154,24 +153,6 @@ class ManipulationOrchestrator:
             fact_logger.logger.info(f" Job {job_id} was cancelled")
             raise CancelledException(f"Job {job_id} was cancelled by user")
 
-    @staticmethod
-    def _normalize_url(url: str) -> str:
-        """Normalize a URL for comparison (strip trailing slash, fragment, lowercase)."""
-        parsed = urlparse(url.lower().strip())
-        path = parsed.path.rstrip('/')
-        return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-    @staticmethod
-    def _filter_source_url_from_results(results: list, source_url: str) -> list:
-        """Remove search results that match the source URL being fact-checked."""
-        normalized_source = ManipulationOrchestrator._normalize_url(source_url)
-        filtered = []
-        for r in results:
-            result_url = r.get('url', '') if isinstance(r, dict) else getattr(r, 'url', '')
-            if ManipulationOrchestrator._normalize_url(result_url) != normalized_source:
-                filtered.append(r)
-        return filtered
-
     def _generate_session_id(self) -> str:
         """Generate unique session ID"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -190,9 +171,7 @@ class ManipulationOrchestrator:
         job_id: str,
         source_info: str = "Unknown source",
         source_credibility: Optional[Dict[str, Any]] = None,
-        standalone: bool = True,
-        shared_scraper=None,
-        source_url: Optional[str] = None
+        standalone: bool = True  # ADD THIS
     ) -> Dict[str, Any]:
         """
         Run the full manipulation detection pipeline with progress updates
@@ -231,8 +210,6 @@ class ManipulationOrchestrator:
             # ================================================================
             # STAGE 0: Log Source Credibility Context (NEW)
             # ================================================================
-            self._check_cancellation(job_id)
-
             if source_credibility:
                 tier = source_credibility.get('tier', '?')
                 bias = source_credibility.get('bias_rating', 'Unknown')
@@ -321,9 +298,8 @@ class ManipulationOrchestrator:
                 content_language="english"
             )
 
-            #  Use shared scraper (from comprehensive mode) or create a new one
-            using_shared_scraper = shared_scraper is not None
-            self.scraper = shared_scraper if shared_scraper else BrowserlessScraper(self.config)
+            #  Create scraper ONCE in the async context (correct event loop)
+            self.scraper = BrowserlessScraper(self.config)
 
             # ================================================================
             # STAGE 3: Fact Verification ( PARALLEL PROCESSING)
@@ -341,8 +317,7 @@ class ManipulationOrchestrator:
                     fact_index=i,
                     total_facts=len(facts),
                     job_id=job_id,
-                    article_summary=article_summary,
-                    source_url=source_url
+                    article_summary=article_summary
                 )
                 for i, fact in enumerate(facts, 1)
             ]
@@ -359,9 +334,6 @@ class ManipulationOrchestrator:
                 f" Parallel verification completed in {verification_duration:.1f}s",
                 extra={"num_facts": len(facts), "duration": verification_duration}
             )
-
-            # Check cancellation after parallel verification
-            self._check_cancellation(job_id)
 
             # Process results from parallel execution
             verification_results: Dict[str, Dict[str, Any]] = {}
@@ -435,9 +407,6 @@ class ManipulationOrchestrator:
                 extra={"num_facts": len(facts), "duration": manipulation_duration}
             )
 
-            # Check cancellation after parallel manipulation analysis
-            self._check_cancellation(job_id)
-
             # Process manipulation results
             manipulation_findings: List[ManipulationFinding] = []
             for result in manipulation_results:
@@ -480,7 +449,6 @@ class ManipulationOrchestrator:
             # ================================================================
             # STAGE 6: Save Audit File
             # ================================================================
-            self._check_cancellation(job_id)
             job_manager.add_progress(job_id, " Saving audit report...")
 
             audit_path = save_search_audit(
@@ -532,22 +500,20 @@ class ManipulationOrchestrator:
                 }
             )
 
-            # Clean up scraper only if we created it (not shared)
-            if not using_shared_scraper:
-                try:
-                    await self.scraper.close()
-                except Exception as cleanup_error:
-                    fact_logger.logger.debug(f"Scraper cleanup: {cleanup_error}")
+            # Clean up scraper to release browser resources
+            try:
+                await self.scraper.close()
+            except Exception as cleanup_error:
+                fact_logger.logger.debug(f"Scraper cleanup: {cleanup_error}")
 
             return result
 
         except CancelledException:
-            # Clean up on cancellation too (only if we own the scraper)
-            if not using_shared_scraper:
-                try:
-                    await self.scraper.close()
-                except Exception:
-                    pass
+            # Clean up on cancellation too
+            try:
+                await self.scraper.close()
+            except Exception:
+                pass
             job_manager.add_progress(job_id, " Analysis cancelled by user")
             raise
 
@@ -556,12 +522,11 @@ class ManipulationOrchestrator:
             import traceback
             fact_logger.logger.error(f"Traceback: {traceback.format_exc()}")
             job_manager.add_progress(job_id, f" Error: {str(e)}")
-            # Clean up scraper on error (only if we own it)
-            if not using_shared_scraper:
-                try:
-                    await self.scraper.close()
-                except Exception:
-                    pass
+            # Clean up scraper on error
+            try:
+                await self.scraper.close()
+            except Exception:
+                pass
             raise
 
     # =========================================================================
@@ -574,8 +539,7 @@ class ManipulationOrchestrator:
         fact_index: int,
         total_facts: int,
         job_id: str,
-        article_summary: ArticleSummary,
-        source_url: Optional[str] = None
+        article_summary: ArticleSummary
     ) -> VerificationResultTuple:
         """
         Verify a single fact - designed for parallel execution with asyncio.gather()
@@ -586,7 +550,6 @@ class ManipulationOrchestrator:
             total_facts: Total number of facts being verified
             job_id: Job ID for progress tracking
             article_summary: Article context for query generation
-            source_url: Optional URL of the article being fact-checked (excluded from search results)
 
         Returns:
             Tuple of (fact_id, verification_result, excerpts, query_audits, error_message)
@@ -605,8 +568,7 @@ class ManipulationOrchestrator:
             verification, excerpts, query_audits = await self._verify_fact(
                 fact=fact,
                 job_id=job_id,
-                article_summary=article_summary,
-                source_url=source_url
+                article_summary=article_summary
             )
 
             # Log completion with score
@@ -691,8 +653,7 @@ class ManipulationOrchestrator:
         self,
         fact: ExtractedFact,
         job_id: str,
-        article_summary: ArticleSummary,
-        source_url: Optional[str] = None
+        article_summary: ArticleSummary
     ) -> Tuple[Dict[str, Any], str, List]:
         """
         Verify a single fact using the existing fact-checking pipeline
@@ -717,28 +678,12 @@ class ManipulationOrchestrator:
             if not queries or not queries.primary_query:
                 return self._empty_verification("Failed to generate search queries"), "", []
 
-            self._check_cancellation(job_id)
-
             # Step 2: Execute web searches
             search_results = await self.brave_searcher.search_multiple(
                 queries=queries.all_queries,
                 search_depth="advanced",
                 max_concurrent=3  #  Can be aggressive with paid Brave account
             )
-
-            # Filter out the source URL to avoid verifying facts against the original article
-            if source_url:
-                filtered_out = 0
-                for query, brave_results in search_results.items():
-                    original_count = len(brave_results.results)
-                    brave_results.results = self._filter_source_url_from_results(
-                        brave_results.results, source_url
-                    )
-                    filtered_out += original_count - len(brave_results.results)
-                if filtered_out > 0:
-                    fact_logger.logger.info(
-                        f"Excluded {filtered_out} results matching source URL: {source_url}"
-                    )
 
             # Build query audits
             for query, brave_results in search_results.items():
@@ -773,8 +718,6 @@ class ManipulationOrchestrator:
             if not all_search_results:
                 return self._empty_verification("No search results found"), "", query_audits
 
-            self._check_cancellation(job_id)
-
             # Step 3: Filter by credibility
             cred_results = await self.credibility_filter.evaluate_sources(
                 fact=fact_obj,
@@ -786,21 +729,14 @@ class ManipulationOrchestrator:
             if not credible_urls:
                 return self._empty_verification("No credible sources found"), "", query_audits
 
-            self._check_cancellation(job_id)
-
             source_metadata = cred_results.source_metadata if cred_results else {}
 
             # Step 4: Scrape sources
             urls_to_scrape = credible_urls[:self.max_sources_per_fact]
-            scraped_content = await self.scraper.scrape_urls_for_facts(
-                urls_to_scrape,
-                cancel_check=lambda: self._check_cancellation(job_id)
-            )
+            scraped_content = await self.scraper.scrape_urls_for_facts(urls_to_scrape)
 
             if not scraped_content or not any(scraped_content.values()):
                 return self._empty_verification("Failed to scrape sources"), "", query_audits
-
-            self._check_cancellation(job_id)
 
             # Step 5: Extract excerpts
             all_excerpts: List[Dict[str, Any]] = []
@@ -875,9 +811,6 @@ class ManipulationOrchestrator:
             }
 
             return result, formatted_excerpts, query_audits
-
-        except CancelledException:
-            raise  # Re-raise cancellation to stop parallel tasks
 
         except Exception as e:
             fact_logger.logger.error(f" Fact verification failed: {e}")

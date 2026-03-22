@@ -332,8 +332,6 @@ class ComprehensiveOrchestrator:
 
             metadata_blocks.append(sv_block)
 
-            self._check_cancellation(job_id)
-
             # =================================================================
             # Step 1c: (Future checks go here)
             # Each new check:
@@ -408,8 +406,7 @@ class ComprehensiveOrchestrator:
         content: str,
         job_id: str,
         stage1_results: Dict[str, Any],
-        shared_scraper=None,
-        source_url: Optional[str] = None
+        shared_scraper=None
     ) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
         """
         Run a single analysis mode
@@ -418,8 +415,6 @@ class ComprehensiveOrchestrator:
             shared_scraper: Optional ScrapeCache for deduplicating URL scrapes
                            across parallel modes. Passed to scraping-heavy modes
                            (key_claims, manipulation). Non-scraping modes ignore it.
-            source_url: Optional URL of the article being fact-checked.
-                       Passed to search-based modes to exclude from results.
 
         Returns: (mode_id, result_dict, error_message)
         """
@@ -438,8 +433,7 @@ class ComprehensiveOrchestrator:
                     source_context=source_context,
                     source_credibility=source_credibility,
                     standalone=False,  # Prevent overwriting comprehensive result
-                    shared_scraper=shared_scraper,  # Phase 3: shared URL cache
-                    source_url=source_url  # Exclude original article from search results
+                    shared_scraper=shared_scraper  # Phase 3: shared URL cache
                 )
                 return (mode_id, result, None)
 
@@ -466,8 +460,7 @@ class ComprehensiveOrchestrator:
                     source_info=source_credibility.get("domain", "Unknown"),
                     source_credibility=source_credibility if source_credibility else None,
                     standalone=False,  # Prevent overwriting comprehensive result
-                    shared_scraper=shared_scraper,  # Phase 3: shared URL cache
-                    source_url=source_url  # Exclude original article from search results
+                    shared_scraper=shared_scraper  # Phase 3: shared URL cache
                 )
                 return (mode_id, result, None)
 
@@ -507,8 +500,7 @@ class ComprehensiveOrchestrator:
         self,
         content: str,
         job_id: str,
-        stage1_results: Dict[str, Any],
-        source_url: Optional[str] = None
+        stage1_results: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Stage 2: Mode Execution (PARALLEL with Shared Scrape Cache)
@@ -561,8 +553,7 @@ class ComprehensiveOrchestrator:
             tasks = [
                 self._run_single_mode(
                     mode_id, content, job_id, stage1_results,
-                    shared_scraper=shared_scraper,
-                    source_url=source_url
+                    shared_scraper=shared_scraper
                 )
                 for mode_id in selected_modes
             ]
@@ -578,9 +569,6 @@ class ComprehensiveOrchestrator:
             # asyncio.gather runs all tasks concurrently.
             # return_exceptions=True ensures one mode failing doesn't cancel the rest.
             raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Check cancellation immediately after parallel execution completes
-            self._check_cancellation(job_id)
 
         finally:
             # =============================================================
@@ -679,8 +667,6 @@ class ComprehensiveOrchestrator:
             Complete synthesis report as dictionary
         """
         start_time = time.time()
-
-        self._check_cancellation(job_id)
 
         self._send_stage_update(job_id, "synthesis", "Synthesizing final report...")
         job_manager.add_progress(job_id, "Running AI-powered report synthesis...")
@@ -957,7 +943,7 @@ class ComprehensiveOrchestrator:
             # STAGE 2: Parallel Mode Execution
             # ================================================================
             job_manager.add_progress(job_id, "Stage 2: Parallel mode execution starting...")
-            stage2_results = await self._run_stage2(content, job_id, stage1_results, source_url=source_url)
+            stage2_results = await self._run_stage2(content, job_id, stage1_results)
 
             self._check_cancellation(job_id)
             job_manager.add_progress(job_id, "Stage 2 complete")
@@ -968,7 +954,6 @@ class ComprehensiveOrchestrator:
             job_manager.add_progress(job_id, "Stage 3: Synthesizing results...")
             stage3_results = await self._run_stage3(job_id, stage1_results, stage2_results)
 
-            self._check_cancellation(job_id)
             job_manager.add_progress(job_id, "Stage 3 complete")
 
             # ================================================================

@@ -399,13 +399,10 @@ def check_key_claims():
         job_id = job_manager.create_job(content)
         fact_logger.logger.info(f" Created key claims job: {job_id}")
 
-        # Extract source_url from source_context if available
-        source_url = source_context.get('url') if source_context else None
-
         # Start background processing with new parameters
         threading.Thread(
             target=run_key_claims_task,
-            args=(job_id, content, source_context, source_credibility, source_url),  # UPDATED
+            args=(job_id, content, source_context, source_credibility),  # UPDATED
             daemon=True
         ).start()
 
@@ -420,11 +417,10 @@ def check_key_claims():
         return jsonify({"error": str(e)}), 500
 
 def run_key_claims_task(
-    job_id: str,
+    job_id: str, 
     content: str,
     source_context: Optional[Dict] = None,      # NEW PARAMETER
-    source_credibility: Optional[Dict] = None,  # NEW PARAMETER
-    source_url: Optional[str] = None            # Exclude from search results
+    source_credibility: Optional[Dict] = None   # NEW PARAMETER
 ):
     """
     Background task runner for key claims verification.
@@ -434,7 +430,6 @@ def run_key_claims_task(
         content: Text to analyze
         source_context: Optional dict with url, publication_name, publication_date
         source_credibility: Optional pre-fetched credibility data
-        source_url: Optional URL of the article being fact-checked (excluded from search results)
     """
     try:
         if key_claims_orchestrator is None:
@@ -444,8 +439,7 @@ def run_key_claims_task(
             f" Job {job_id}: Starting key claims analysis",
             extra={
                 "has_source_context": source_context is not None,
-                "has_credibility": source_credibility is not None,
-                "has_source_url": source_url is not None
+                "has_credibility": source_credibility is not None
             }
         )
 
@@ -454,8 +448,7 @@ def run_key_claims_task(
                 text_content=content,
                 job_id=job_id,
                 source_context=source_context,
-                source_credibility=source_credibility,
-                source_url=source_url
+                source_credibility=source_credibility
             )
         )
 
@@ -665,9 +658,6 @@ def check_manipulation():
         content = request_json.get('content') or request_json.get('text')
         source_info = request_json.get('source_info', 'Unknown source')
 
-        # Extract source_url for filtering: use source_info if it looks like a URL
-        source_url = source_info if source_info.startswith(('http://', 'https://')) else None
-
         # NEW: Accept pre-fetched credibility data
         source_credibility = request_json.get('source_credibility')
 
@@ -696,7 +686,7 @@ def check_manipulation():
         # Start background processing with source_credibility
         threading.Thread(
             target=run_manipulation_task,
-            args=(job_id, content, source_info, source_credibility, source_url),  # UPDATED
+            args=(job_id, content, source_info, source_credibility),  # UPDATED
             daemon=True
         ).start()
 
@@ -764,11 +754,10 @@ def run_lie_detection_task(
         cleanup_thread_loop()
 
 def run_manipulation_task(
-    job_id: str,
-    content: str,
+    job_id: str, 
+    content: str, 
     source_info: str,
-    source_credibility: Optional[Dict] = None,
-    source_url: Optional[str] = None
+    source_credibility: Optional[Dict] = None  # NEW PARAMETER
 ):
     """
     Background task runner for manipulation detection.
@@ -777,8 +766,7 @@ def run_manipulation_task(
         job_id: Job ID for tracking
         content: Article text to analyze
         source_info: URL or source name
-        source_credibility: Optional pre-fetched credibility data
-        source_url: Optional URL of the article being fact-checked (excluded from search results)
+        source_credibility: Optional pre-fetched credibility data (NEW)
     """
     try:
         if manipulation_orchestrator is None:
@@ -788,8 +776,7 @@ def run_manipulation_task(
             f" Job {job_id}: Starting manipulation detection",
             extra={
                 "source_info": source_info,
-                "has_credibility": source_credibility is not None,
-                "has_source_url": source_url is not None
+                "has_credibility": source_credibility is not None
             }
         )
 
@@ -798,8 +785,7 @@ def run_manipulation_task(
                 content=content,
                 job_id=job_id,
                 source_info=source_info,
-                source_credibility=source_credibility,
-                source_url=source_url
+                source_credibility=source_credibility
             )
         )
 

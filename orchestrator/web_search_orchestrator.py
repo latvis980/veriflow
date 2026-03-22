@@ -24,7 +24,6 @@ Pipeline:
 from langsmith import traceable
 import time
 import asyncio
-from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional, Tuple
 
 from utils.logger import fact_logger
@@ -126,24 +125,6 @@ class WebSearchOrchestrator:
             "unverified_count": len([r for r in results if r.match_score < 0.7])
         }
 
-    @staticmethod
-    def _normalize_url(url: str) -> str:
-        """Normalize a URL for comparison (strip trailing slash, fragment, lowercase)."""
-        parsed = urlparse(url.lower().strip())
-        path = parsed.path.rstrip('/')
-        return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-    @staticmethod
-    def _filter_source_url_from_results(results: list, source_url: str) -> list:
-        """Remove search results that match the source URL being fact-checked."""
-        normalized_source = WebSearchOrchestrator._normalize_url(source_url)
-        filtered = []
-        for r in results:
-            result_url = r.get('url', '') if isinstance(r, dict) else getattr(r, 'url', '')
-            if WebSearchOrchestrator._normalize_url(result_url) != normalized_source:
-                filtered.append(r)
-        return filtered
-
     @traceable(
         name="web_search_fact_verification",
         run_type="chain",
@@ -153,8 +134,7 @@ class WebSearchOrchestrator:
         self,
         text_content: str,
         job_id: str,
-        shared_scraper=None,
-        source_url: Optional[str] = None
+        shared_scraper=None
     ) -> dict:
         """
         Process with full parallel processing and search audit
@@ -167,9 +147,6 @@ class WebSearchOrchestrator:
             shared_scraper: Optional shared ScrapeCache from comprehensive mode.
                            If provided, uses it instead of creating a new scraper.
                            The caller is responsible for closing it.
-            source_url: Optional URL of the article being fact-checked.
-                       Results from this URL will be excluded from Brave search
-                       to avoid verifying facts against the original source.
         """
         session_id = self.file_manager.create_session()
         start_time = time.time()
@@ -240,9 +217,6 @@ class WebSearchOrchestrator:
             query_tasks = [generate_queries_for_fact(fact) for fact in facts]
             query_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
-            # Check cancellation after parallel query generation
-            self._check_cancellation(job_id)
-
             # Process query results
             all_queries_by_fact = {}
             for result in query_results:
@@ -303,9 +277,6 @@ class WebSearchOrchestrator:
             search_tasks = [search_for_fact(fact) for fact in facts]
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-            # Check cancellation after parallel searches
-            self._check_cancellation(job_id)
-
             # Process search results
             search_results_by_fact = {}
             query_audits_by_fact = {}
@@ -322,26 +293,8 @@ class WebSearchOrchestrator:
                     total_results += len(brave_results.results)
 
             search_duration = time.time() - search_start
-
-            # Filter out the source URL from search results to avoid
-            # verifying facts against the article being fact-checked
-            if source_url:
-                filtered_out = 0
-                for fact_id, search_results in search_results_by_fact.items():
-                    for query, brave_results in search_results.items():
-                        original_count = len(brave_results.results)
-                        brave_results.results = self._filter_source_url_from_results(
-                            brave_results.results, source_url
-                        )
-                        filtered_out += original_count - len(brave_results.results)
-                if filtered_out > 0:
-                    total_results -= filtered_out
-                    fact_logger.logger.info(
-                        f"Excluded {filtered_out} results matching source URL: {source_url}"
-                    )
-
             job_manager.add_progress(
-                job_id,
+                job_id, 
                 f"Found {total_results} potential sources in {search_duration:.1f}s"
             )
 
@@ -377,9 +330,6 @@ class WebSearchOrchestrator:
 
             filter_tasks = [filter_sources_for_fact(fact) for fact in facts]
             filter_results = await asyncio.gather(*filter_tasks, return_exceptions=True)
-
-            # Check cancellation after parallel filtering
-            self._check_cancellation(job_id)
 
             # Process filter results
             credible_urls_by_fact = {}
@@ -424,15 +374,8 @@ class WebSearchOrchestrator:
                         url_to_fact_map[url] = []
                     url_to_fact_map[url].append(fact.id)
 
-            # Check cancellation before starting scraping
-            self._check_cancellation(job_id)
-
             # Scrape all URLs at once (browser pool handles concurrency)
-            # Pass cancel_check so scraper can abort mid-batch
-            all_scraped_content = await scraper.scrape_urls_for_facts(
-                all_urls_to_scrape,
-                cancel_check=lambda: self._check_cancellation(job_id)
-            )
+            all_scraped_content = await scraper.scrape_urls_for_facts(all_urls_to_scrape)
 
             # Organize scraped content by fact
             scraped_content_by_fact = {}
@@ -462,9 +405,6 @@ class WebSearchOrchestrator:
                 job_id, 
                 f"Scraped {successful_scrapes}/{len(all_urls_to_scrape)} sources in {scrape_duration:.1f}s"
             )
-
-            # Check cancellation after scraping
-            self._check_cancellation(job_id)
 
             # Build fact search audits
             for fact in facts:
@@ -540,9 +480,6 @@ class WebSearchOrchestrator:
 
             verify_tasks = [verify_single_fact(fact) for fact in facts]
             results = await asyncio.gather(*verify_tasks, return_exceptions=True)
-
-            # Check cancellation after parallel verification
-            self._check_cancellation(job_id)
 
             # Process verification results
             final_results = []

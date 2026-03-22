@@ -13,7 +13,6 @@ type Props = {
   data: any;
   onReset: () => void;
   sourceUrl?: string;
-  publicationName?: string;
 };
 
 const modeLabel: Record<string, string> = {
@@ -25,7 +24,7 @@ const modeLabel: Record<string, string> = {
   "llm-output": "LLM Output Verification",
 };
 
-const ReportRenderer = ({ mode, data, onReset, sourceUrl, publicationName }: Props) => {
+const ReportRenderer = ({ mode, data, onReset, sourceUrl }: Props) => {
   const reportRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -47,14 +46,6 @@ const ReportRenderer = ({ mode, data, onReset, sourceUrl, publicationName }: Pro
     const timestamp = new Date().toLocaleString();
     const title = modeLabel[mode] ?? "VeriFlow Report";
 
-    // Build a meaningful PDF filename from mode + publication name, or mode + date/time
-    const pubName = publicationName || data?.source_verification?.publication_name;
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10);
-    const timeStr = now.toTimeString().slice(0, 5).replace(":", "-");
-    const suffix = pubName || `${dateStr}_${timeStr}`;
-    const pdfTitle = `VeriFlow_${title.replace(/\s+/g, "_")}_${suffix.replace(/\s+/g, "_")}`;
-
     // Build source URL block for the printed PDF header
     const sourceUrlHtml = sourceUrl
       ? `<div class="source-url">
@@ -69,7 +60,7 @@ const ReportRenderer = ({ mode, data, onReset, sourceUrl, publicationName }: Pro
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${pdfTitle}</title>
+  <title>${title} - VeriFlow</title>
   ${styleLinks}
   ${styleBlocks}
   <style>

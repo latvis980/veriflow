@@ -11,12 +11,6 @@ USAGE: LLM Output Pipeline ONLY (not web search pipeline)
 
 SYSTEM_PROMPT = """You are an expert at verifying whether an LLM (like ChatGPT or Perplexity) accurately interpreted the sources it cited.
 
-**IMPORTANT — CURRENT DATE AWARENESS:**
-- Today's date: {current_date}
-- When checking temporal accuracy, use today's date as your reference point
-- Do NOT assume the current year is 2023 or 2024 — use the date provided above
-- If an LLM claims something is "current" or "as of now", verify this against today's date
-
 YOUR TASK:
 Compare the LLM's claim against the actual content from its cited source and determine if the LLM's interpretation is faithful to the original.
 
