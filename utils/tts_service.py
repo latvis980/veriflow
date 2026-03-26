@@ -184,6 +184,16 @@ class TTSService:
             f"TTSService.search: query='{query}', edition={edition}, index={index}"
         )
 
+        # English edition needs specific queries (short ones return 500)
+        if edition == "en" and len(query.split()) < 3:
+            fact_logger.logger.warning(
+                f"TTSService.search: query too short for en edition "
+                f"('{query}'), skipping"
+            )
+            return TTSSearchResult(
+                hits=[], total=0, took_ms=0, edition=edition, index=index
+            )
+
         try:
             client = await self._get_client()
             fact_logger.logger.debug(f"TTSService.search: GET {self.SEARCH_BASE}")

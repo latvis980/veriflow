@@ -301,10 +301,30 @@ class KeyClaimsOrchestrator:
                         for c in claims
                     ]
 
+                    # Determine realm from broad_context (extracted in Stage 1)
+                    detected_realm = "unknown"
+                    if broad_context and hasattr(broad_context, 'content_type'):
+                        ct = broad_context.content_type.lower()
+                        if any(w in ct for w in ['news', 'politic', 'government', 'official']):
+                            detected_realm = "political"
+                        elif any(w in ct for w in ['econom', 'financ', 'business', 'market']):
+                            detected_realm = "economic"
+                        elif any(w in ct for w in ['sport']):
+                            detected_realm = "sports"
+                        elif any(w in ct for w in ['entertain', 'celebrit', 'movie', 'music']):
+                            detected_realm = "entertainment"
+                        elif any(w in ct for w in ['tech', 'scien', 'software']):
+                            detected_realm = "technology"
+                        else:
+                            detected_realm = "political"
+
+                    if not self.tts_router:
+                        raise RuntimeError("TTSRouter not initialized")
+                        
                     routing_decisions = await self.tts_router.route(
                         claims=claims_for_router,
                         content_language=content_location.language if content_location else "english",
-                        content_realm=content_location.country if content_location else "unknown",
+                        content_realm=detected_realm,
                     )
 
                     tts_routed = [d for d in routing_decisions if d.route == "tts"]
@@ -318,6 +338,8 @@ class KeyClaimsOrchestrator:
 
                         async def check_tts_for_claim(decision):
                             try:
+                                if not self.tts_service:
+                                    return (decision.claim_id, None)
                                 evidence = await self.tts_service.find_evidence_for_claim(
                                     query=decision.tts_query,
                                     edition=decision.tts_edition or "en",
@@ -431,13 +453,14 @@ class KeyClaimsOrchestrator:
                 )
 
                 processing_time = time.time() - start_time
-                summary = self._generate_summary(tts_results)
 
-                # Build early return (same structure as normal return)
-                return {
+                # Build summary inline (same keys frontend expects)
+                avg_score = sum(r.match_score for r in tts_results) / len(tts_results) if tts_results else 0
+
+                result = {
                     "success": True,
                     "session_id": session_id,
-                    "facts": [
+                    "key_claims": [
                         {
                             "id": r.fact_id,
                             "statement": r.statement,
@@ -447,11 +470,22 @@ class KeyClaimsOrchestrator:
                         }
                         for r in tts_results
                     ],
-                    "summary": summary,
+                    "summary": {
+                        "total_key_claims": len(claims),
+                        "verified_count": len([r for r in tts_results if r.match_score >= 0.9]),
+                        "partial_count": len([r for r in tts_results if 0.7 <= r.match_score < 0.9]),
+                        "unverified_count": len([r for r in tts_results if r.match_score < 0.7]),
+                        "overall_credibility": self._get_credibility_label(avg_score),
+                        "average_score": avg_score,
+                    },
                     "processing_time": processing_time,
                     "methodology": "tts_verified",
                     "tts_stats": tts_stats,
                 }
+
+                if standalone:
+                    job_manager.complete_job(job_id, result)
+                return result
 
             # ================================================================
             # STAGE 2: Generate Search Queries (PARALLEL)
