@@ -4,23 +4,16 @@ TTS Router Agent
 Determines which claims should be checked against The True Story (TTS)
 news aggregation platform before falling back to standard web search.
 
-Uses Gemini 2.0 Flash for fast, cheap classification (Phase 6 optimization).
-Runs AFTER fact extraction, BEFORE verification.
-
-Integration point:
-  fact_extractor -> tts_router -> [tts_service | web_search] -> fact_checker
-
-The router examines each extracted claim and decides:
-- "tts": claim is about a recent news event likely covered by TTS
-- "skip": claim is not news-related, go straight to web search
+Uses Gemini 2.0 Flash for fast, cheap classification.
+Falls back to OpenAI gpt-4o-mini if Gemini is not available.
 """
 
 import json
+import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 from langchain.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 
 from prompts.tts_router_prompts import get_tts_router_prompts
@@ -43,18 +36,56 @@ class TTSRouter:
     Routes claims to TTS or web search based on content analysis.
 
     Uses Gemini 2.0 Flash for speed and cost efficiency.
-    Processes all claims in a single LLM call (batch routing).
+    Falls back to OpenAI gpt-4o-mini if Gemini is not available.
     """
 
     def __init__(self, config=None):
         self.config = config
+        self.llm = None
 
-        # Use Gemini Flash for routing (Phase 6 optimization)
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
-            temperature=0.0,
-            max_output_tokens=2000,
-        )
+        fact_logger.logger.info("TTSRouter: initializing...")
+
+        # Try Gemini Flash first (Phase 6 optimization)
+        gemini_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                self.llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.0-flash",
+                    temperature=0.0,
+                    max_output_tokens=2000,
+                    google_api_key=gemini_key,
+                )
+                fact_logger.logger.info("TTSRouter: using Gemini 2.0 Flash")
+            except ImportError:
+                fact_logger.logger.warning(
+                    "TTSRouter: langchain-google-genai not installed, "
+                    "trying OpenAI fallback"
+                )
+            except Exception as e:
+                fact_logger.logger.warning(
+                    f"TTSRouter: Gemini init failed: {e}, trying OpenAI fallback"
+                )
+        else:
+            fact_logger.logger.info(
+                "TTSRouter: no GOOGLE_API_KEY/GEMINI_API_KEY, using OpenAI"
+            )
+
+        # Fallback to OpenAI gpt-4o-mini
+        if self.llm is None:
+            try:
+                from langchain_openai import ChatOpenAI
+                self.llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    temperature=0.0,
+                    max_tokens=2000,
+                ).bind(response_format={"type": "json_object"})
+                fact_logger.logger.info("TTSRouter: using OpenAI gpt-4o-mini (fallback)")
+            except Exception as e:
+                fact_logger.logger.error(f"TTSRouter: OpenAI fallback also failed: {e}")
+                raise RuntimeError(
+                    "TTSRouter: no LLM available (need GOOGLE_API_KEY or OPENAI_API_KEY)"
+                )
 
         prompts = get_tts_router_prompts()
         self.prompt = ChatPromptTemplate.from_messages([
@@ -62,12 +93,12 @@ class TTSRouter:
             ("human", prompts["user"]),
         ])
 
-        fact_logger.logger.info("TTSRouter initialized (Gemini 2.0 Flash)")
+        fact_logger.logger.info("TTSRouter: initialized successfully")
 
     @traceable(
         name="tts_route_claims",
         run_type="chain",
-        tags=["tts", "routing", "gemini-flash"]
+        tags=["tts", "routing"]
     )
     async def route(
         self,
@@ -77,23 +108,21 @@ class TTSRouter:
     ) -> List[TTSRoutingDecision]:
         """
         Route a batch of claims to TTS or web search.
-
-        Args:
-            claims: List of extracted claims/facts with 'id' and 'statement'
-            content_language: Detected language of the content
-            content_realm: Detected realm (political, economic, etc.)
-
-        Returns:
-            List of TTSRoutingDecision for each claim
         """
         if not claims:
+            fact_logger.logger.info("TTSRouter: no claims to route")
             return []
 
+        fact_logger.logger.info(
+            f"TTSRouter: routing {len(claims)} claims "
+            f"(language={content_language}, realm={content_realm})"
+        )
+
         # Quick pre-filter: if realm is clearly outside TTS scope, skip all
-        skip_realms = {"entertainment", "sports", "technology", "other"}
+        skip_realms = {"entertainment", "sports", "technology"}
         if content_realm.lower() in skip_realms:
             fact_logger.logger.info(
-                f"TTS Router: realm '{content_realm}' outside TTS scope, "
+                f"TTSRouter: realm '{content_realm}' outside TTS scope, "
                 f"skipping all {len(claims)} claims"
             )
             return [
@@ -110,8 +139,11 @@ class TTSRouter:
 
         # Format claims for the prompt
         claims_text = self._format_claims(claims)
+        fact_logger.logger.debug(f"TTSRouter: claims text for LLM:\n{claims_text}")
 
         try:
+            fact_logger.logger.info("TTSRouter: calling LLM for routing decisions...")
+
             chain = self.prompt | self.llm
             response = await chain.ainvoke({
                 "claims_text": claims_text,
@@ -119,20 +151,36 @@ class TTSRouter:
                 "realm": content_realm,
             })
 
+            fact_logger.logger.info("TTSRouter: LLM response received")
+            fact_logger.logger.debug(
+                f"TTSRouter: raw response: {response.content[:500]}"
+            )
+
             decisions = self._parse_response(response.content, claims)
 
             # Log routing summary
             tts_count = sum(1 for d in decisions if d.route == "tts")
             skip_count = sum(1 for d in decisions if d.route == "skip")
             fact_logger.logger.info(
-                f"TTS Router: {tts_count} claims -> TTS, "
+                f"TTSRouter: {tts_count} claims -> TTS, "
                 f"{skip_count} claims -> web search"
             )
+            for d in decisions:
+                fact_logger.logger.info(
+                    f"  [{d.claim_id}] -> {d.route} "
+                    f"(query={d.tts_query}, edition={d.tts_edition}, "
+                    f"conf={d.confidence:.2f}, reason={d.reason})"
+                )
 
             return decisions
 
         except Exception as e:
-            fact_logger.logger.error(f"TTS Router error: {e}")
+            fact_logger.logger.error(
+                f"TTSRouter: LLM call failed: {type(e).__name__}: {e}"
+            )
+            import traceback
+            fact_logger.logger.error(f"TTSRouter traceback: {traceback.format_exc()}")
+
             # On error, default to skipping TTS (safe fallback)
             return [
                 TTSRoutingDecision(
@@ -173,6 +221,10 @@ class TTSRouter:
             data = json.loads(text)
             raw_decisions = data.get("routing_decisions", [])
 
+            fact_logger.logger.debug(
+                f"TTSRouter: parsed {len(raw_decisions)} decisions from LLM"
+            )
+
             # Build a lookup for original claim IDs
             original_ids = {
                 c.get("id", f"fact{i+1}") for i, c in enumerate(original_claims)
@@ -200,10 +252,14 @@ class TTSRouter:
                     confidence=float(rd.get("confidence", 0.5)),
                 ))
 
-            # Fill in any claims missing from LLM response (default to skip)
+            # Fill in any claims missing from LLM response
             for i, claim in enumerate(original_claims):
                 cid = claim.get("id", f"fact{i+1}")
                 if cid not in seen_ids:
+                    fact_logger.logger.warning(
+                        f"TTSRouter: claim {cid} missing from LLM response, "
+                        f"defaulting to skip"
+                    )
                     decisions.append(TTSRoutingDecision(
                         claim_id=cid,
                         route="skip",
@@ -216,8 +272,12 @@ class TTSRouter:
             return decisions
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            fact_logger.logger.error(f"TTS Router parse error: {e}")
-            # Return skip for all claims on parse failure
+            fact_logger.logger.error(
+                f"TTSRouter: parse error: {type(e).__name__}: {e}"
+            )
+            fact_logger.logger.error(
+                f"TTSRouter: raw text was: {response_text[:500]}"
+            )
             return [
                 TTSRoutingDecision(
                     claim_id=c.get("id", f"fact{i+1}"),

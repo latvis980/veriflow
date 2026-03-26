@@ -7,15 +7,6 @@ Provides three integration paths:
 1. Search API (esearch) - real-time keyword search across 6-month archive
 2. Stories API - fetch cluster details by cluster_id
 3. Issue monitor - poll for new editions and download tar.gz archives
-
-Search API is the primary real-time path used during fact verification.
-Tar.gz polling builds the local Supabase cache for fast entity lookups.
-
-Endpoints:
-- Issue ID:  http://static.thetruestory.news/{edition}-issue-id.json
-- Issue tar: http://static.thetruestory.news/{edition}-issue.tar.gz
-- Search:    https://embed-search.thetruestory.news/esearch/api
-- Stories:   https://thetruestory.news/api/stories/{cluster_id}
 """
 
 import asyncio
@@ -42,10 +33,10 @@ from utils.logger import fact_logger
 class TTSSearchHit:
     """A single search result from the esearch API"""
     doc_id: int
-    title: str  # may contain <b> highlight tags
+    title: str
     url: str
     timestamp: str
-    text: str  # article text, may contain <b> highlights
+    text: str
     source_title: str
     source_slug: str
     score: float
@@ -58,17 +49,14 @@ class TTSSearchHit:
 
     @property
     def clean_title(self) -> str:
-        """Title with <b> tags stripped"""
         return re.sub(r'</?b>', '', self.title)
 
     @property
     def clean_text(self) -> str:
-        """Text with <b> tags stripped"""
         return re.sub(r'</?b>', '', self.text)
 
     @property
     def source_count(self) -> int:
-        """Total sources: group items + 1 (the hit itself)"""
         return len(self.group) + 1
 
 
@@ -83,11 +71,9 @@ class TTSSearchResult:
 
     @property
     def has_clustered_results(self) -> bool:
-        """Whether any hits have cluster grouping"""
         return any(h.cluster_id for h in self.hits)
 
     def best_cluster_match(self, min_cluster_size: int = 3) -> Optional[TTSSearchHit]:
-        """Return highest-scoring hit with a cluster above minimum size"""
         for hit in self.hits:
             if hit.cluster_id and (hit.cluster_size or 0) >= min_cluster_size:
                 return hit
@@ -100,7 +86,7 @@ class TTSClusterInfo:
     cluster_id: str
     timestamp: str
     titles: List[Dict[str, Any]]
-    items: List[Dict[str, Any]]  # ranked articles with source info
+    items: List[Dict[str, Any]]
     categories: List[str]
 
 
@@ -119,40 +105,24 @@ class TTSIssueInfo:
 class TTSService:
     """
     Client for The True Story APIs.
-
-    Usage:
-        tts = TTSService()
-
-        # Real-time search during verification
-        results = await tts.search("Macron Ukraine negotiations", edition="en")
-        if results.hits:
-            best = results.best_cluster_match(min_cluster_size=5)
-            if best:
-                # Use best.clean_text and best.group as evidence
-
-        # Check for new issue
-        issue = await tts.check_issue("ru")
-        if issue.issue_id != last_known_id:
-            clusters = await tts.download_issue("ru")
     """
 
     SEARCH_BASE = "https://embed-search.thetruestory.news/esearch/api"
     STORIES_BASE = "https://thetruestory.news/api/stories"
     STATIC_BASE = "http://static.thetruestory.news"
 
-    # Rate limiting: be gentle with TTS servers
-    MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
+    MIN_REQUEST_INTERVAL = 1.0
 
     def __init__(self, request_timeout: float = 30.0):
         self.request_timeout = request_timeout
         self._last_request_time = 0.0
         self._client: Optional[httpx.AsyncClient] = None
 
-        fact_logger.logger.info("TTSService initialized")
+        fact_logger.logger.info("TTSService: initialized")
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazy-init async HTTP client"""
         if self._client is None or self._client.is_closed:
+            fact_logger.logger.debug("TTSService: creating new httpx.AsyncClient")
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.request_timeout),
                 follow_redirects=True,
@@ -164,17 +134,18 @@ class TTSService:
         return self._client
 
     async def _rate_limit(self):
-        """Enforce minimum interval between requests"""
         now = time.time()
         elapsed = now - self._last_request_time
         if elapsed < self.MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(self.MIN_REQUEST_INTERVAL - elapsed)
+            wait = self.MIN_REQUEST_INTERVAL - elapsed
+            fact_logger.logger.debug(f"TTSService: rate limiting, waiting {wait:.2f}s")
+            await asyncio.sleep(wait)
         self._last_request_time = time.time()
 
     async def close(self):
-        """Close the HTTP client"""
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+            fact_logger.logger.debug("TTSService: client closed")
 
     # ========================================================================
     # SEARCH API
@@ -194,20 +165,7 @@ class TTSService:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
     ) -> TTSSearchResult:
-        """
-        Search The True Story via esearch API.
-
-        Args:
-            query: Search keywords (use original language of the claim)
-            edition: "en" for world, "ru" for Russian
-            index: "3d" (3-day), "archive" (6-month), or "*" (all)
-            grouping: Group related articles by cluster
-            date_from: Filter from date (YYYY-MM-DD)
-            date_to: Filter to date (YYYY-MM-DD)
-
-        Returns:
-            TTSSearchResult with hits, totals, and timing
-        """
+        """Search The True Story via esearch API."""
         await self._rate_limit()
 
         params = {
@@ -222,11 +180,24 @@ class TTSService:
         if date_to:
             params["date_to"] = date_to
 
+        fact_logger.logger.info(
+            f"TTSService.search: query='{query}', edition={edition}, index={index}"
+        )
+
         try:
             client = await self._get_client()
+            fact_logger.logger.debug(f"TTSService.search: GET {self.SEARCH_BASE}")
+
             response = await client.get(self.SEARCH_BASE, params=params)
             response.raise_for_status()
-            data = response.json().get("data", {})
+
+            raw_data = response.json()
+            data = raw_data.get("data", {})
+
+            fact_logger.logger.debug(
+                f"TTSService.search: response status={response.status_code}, "
+                f"data keys={list(data.keys())}"
+            )
 
             hits = []
             for h in data.get("hits", []):
@@ -259,21 +230,47 @@ class TTSService:
             )
 
             fact_logger.logger.info(
-                f"TTS search: '{query}' ({edition}) -> "
+                f"TTSService.search: '{query}' ({edition}) -> "
                 f"{len(hits)} hits, {total} total, {result.took_ms}ms"
             )
+
+            # Log top hit details
+            if hits:
+                top = hits[0]
+                fact_logger.logger.info(
+                    f"TTSService.search: top hit: cluster_id={top.cluster_id}, "
+                    f"cluster_size={top.cluster_size}, score={top.score:.2f}, "
+                    f"source={top.source_title}"
+                )
 
             return result
 
         except httpx.HTTPStatusError as e:
             fact_logger.logger.error(
-                f"TTS search HTTP error: {e.response.status_code} for query '{query}'"
+                f"TTSService.search: HTTP {e.response.status_code} "
+                f"for query '{query}'"
             )
-            return TTSSearchResult(hits=[], total=0, took_ms=0, edition=edition, index=index)
+            return TTSSearchResult(
+                hits=[], total=0, took_ms=0, edition=edition, index=index
+            )
+
+        except httpx.ConnectError as e:
+            fact_logger.logger.error(
+                f"TTSService.search: connection error: {e}"
+            )
+            return TTSSearchResult(
+                hits=[], total=0, took_ms=0, edition=edition, index=index
+            )
 
         except Exception as e:
-            fact_logger.logger.error(f"TTS search error: {e}")
-            return TTSSearchResult(hits=[], total=0, took_ms=0, edition=edition, index=index)
+            fact_logger.logger.error(
+                f"TTSService.search: {type(e).__name__}: {e}"
+            )
+            import traceback
+            fact_logger.logger.error(f"TTSService traceback: {traceback.format_exc()}")
+            return TTSSearchResult(
+                hits=[], total=0, took_ms=0, edition=edition, index=index
+            )
 
     # ========================================================================
     # STORIES API
@@ -285,18 +282,11 @@ class TTSService:
         tags=["tts", "stories"]
     )
     async def get_story(self, cluster_id: str) -> Optional[TTSClusterInfo]:
-        """
-        Fetch cluster details from the Stories API.
-
-        Args:
-            cluster_id: UUID of the cluster
-
-        Returns:
-            TTSClusterInfo with titles, items, and categories
-        """
+        """Fetch cluster details from the Stories API."""
         await self._rate_limit()
 
         url = f"{self.STORIES_BASE}/{cluster_id}"
+        fact_logger.logger.info(f"TTSService.get_story: fetching {cluster_id[:12]}...")
 
         try:
             client = await self._get_client()
@@ -308,6 +298,9 @@ class TTSService:
             cluster_ranks = content.get("cluster_rank", [])
 
             if not cluster_ranks:
+                fact_logger.logger.warning(
+                    f"TTSService.get_story: no cluster_rank data for {cluster_id}"
+                )
                 return None
 
             cr = cluster_ranks[0]
@@ -345,14 +338,16 @@ class TTSService:
             )
 
             fact_logger.logger.info(
-                f"TTS story: cluster {cluster_id[:12]}... -> "
+                f"TTSService.get_story: cluster {cluster_id[:12]}... -> "
                 f"{len(items)} items"
             )
 
             return result
 
         except Exception as e:
-            fact_logger.logger.error(f"TTS story fetch error: {e}")
+            fact_logger.logger.error(
+                f"TTSService.get_story: {type(e).__name__}: {e}"
+            )
             return None
 
     # ========================================================================
@@ -360,18 +355,11 @@ class TTSService:
     # ========================================================================
 
     async def check_issue(self, edition: str = "ru") -> Optional[TTSIssueInfo]:
-        """
-        Check the current issue ID for an edition.
-
-        Args:
-            edition: "ru" or "en"
-
-        Returns:
-            TTSIssueInfo with issue_id and timestamp
-        """
+        """Check the current issue ID for an edition."""
         await self._rate_limit()
 
         url = f"{self.STATIC_BASE}/{edition}-issue-id.json"
+        fact_logger.logger.debug(f"TTSService.check_issue: GET {url}")
 
         try:
             client = await self._get_client()
@@ -386,26 +374,15 @@ class TTSService:
             )
 
         except Exception as e:
-            fact_logger.logger.error(f"TTS issue check error ({edition}): {e}")
+            fact_logger.logger.error(f"TTSService.check_issue ({edition}): {e}")
             return None
 
     async def download_issue(self, edition: str = "ru") -> List[Dict[str, Any]]:
-        """
-        Download and parse the current issue tar.gz archive.
-
-        Returns a list of parsed cluster dictionaries from the archive.
-        Each cluster contains: cluster_id, tags, summary, docs, cite_clusters,
-        categories, source_countries, etc.
-
-        Args:
-            edition: "ru" or "en"
-
-        Returns:
-            List of cluster dicts (one per JSON file in the archive)
-        """
+        """Download and parse the current issue tar.gz archive."""
         await self._rate_limit()
 
         url = f"{self.STATIC_BASE}/{edition}-issue.tar.gz"
+        fact_logger.logger.info(f"TTSService.download_issue: GET {url}")
 
         try:
             client = await self._get_client()
@@ -429,18 +406,20 @@ class TTSService:
                         clusters.append(cluster_data)
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
                         fact_logger.logger.warning(
-                            f"TTS: failed to parse {member.name}: {e}"
+                            f"TTSService: failed to parse {member.name}: {e}"
                         )
 
             fact_logger.logger.info(
-                f"TTS issue download ({edition}): "
+                f"TTSService.download_issue ({edition}): "
                 f"{len(clusters)} clusters parsed"
             )
 
             return clusters
 
         except Exception as e:
-            fact_logger.logger.error(f"TTS issue download error ({edition}): {e}")
+            fact_logger.logger.error(
+                f"TTSService.download_issue ({edition}): {type(e).__name__}: {e}"
+            )
             return []
 
     # ========================================================================
@@ -456,27 +435,32 @@ class TTSService:
     ) -> Optional[Dict[str, Any]]:
         """
         High-level method: search TTS for a claim and return structured evidence.
-
-        This is the main entry point called from orchestrators during verification.
-
-        Args:
-            query: Search keywords (from TTS router)
-            edition: "en" or "ru"
-            min_cluster_size: Minimum sources for a cluster to count as evidence
-            max_evidence_articles: Max article texts to include in evidence
-
-        Returns:
-            Evidence dict with cluster info, article texts, and source list,
-            or None if no good match found.
+        Main entry point called from orchestrators during verification.
         """
+        fact_logger.logger.info(
+            f"TTSService.find_evidence: query='{query}', edition={edition}"
+        )
+
         results = await self.search(query, edition=edition, grouping=True)
 
         if not results.hits:
+            fact_logger.logger.info(
+                f"TTSService.find_evidence: no hits for '{query}'"
+            )
             return None
 
         best = results.best_cluster_match(min_cluster_size=min_cluster_size)
         if not best:
+            fact_logger.logger.info(
+                f"TTSService.find_evidence: no cluster >= {min_cluster_size} sources "
+                f"for '{query}' (top hit has cluster_size={results.hits[0].cluster_size})"
+            )
             return None
+
+        fact_logger.logger.info(
+            f"TTSService.find_evidence: matched cluster '{best.clean_title[:60]}' "
+            f"({best.cluster_size} sources, score={best.score:.2f})"
+        )
 
         # Collect article texts from the top hit and its group
         evidence_texts = [
@@ -488,8 +472,6 @@ class TTSService:
         ]
 
         for g in best.group[:max_evidence_articles - 1]:
-            # Group items from search have title and source but not full text.
-            # The main hit's text is the most detailed.
             evidence_texts.append({
                 "source": g.get("source_title", ""),
                 "title": re.sub(r'</?b>', '', g.get("title", "")),
