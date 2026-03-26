@@ -43,6 +43,10 @@ from agents.query_generator import QueryGenerator
 from agents.credibility_filter import CredibilityFilter
 from agents.highlighter import Highlighter
 
+# TTS (The True Story) integration - Layer 0 verification
+from agents.tts_router import TTSRouter
+from utils.tts_service import TTSService
+
 # Import search audit utilities
 from utils.search_audit_builder import (
     build_session_search_audit,
@@ -88,6 +92,18 @@ class KeyClaimsOrchestrator:
             self.r2_enabled = False
             self.r2_uploader = None
             fact_logger.logger.warning(f"R2 not available for audits: {e}")
+
+        # TTS (The True Story) - Layer 0 verification
+        try:
+            self.tts_router = TTSRouter(config)
+            self.tts_service = TTSService()
+            self.tts_enabled = True
+            fact_logger.logger.info("TTS Layer 0 enabled (Key Claims)")
+        except Exception as e:
+            self.tts_router = None
+            self.tts_service = None
+            self.tts_enabled = False
+            fact_logger.logger.warning(f"TTS Layer 0 not available: {e}")
 
         fact_logger.log_component_start(
             "KeyClaimsOrchestrator",
@@ -261,6 +277,183 @@ class KeyClaimsOrchestrator:
             )
 
             # ================================================================
+            # STAGE 1.5: TTS Layer 0 - Check The True Story (NEW)
+            # ================================================================
+            tts_results = []
+            tts_resolved_ids = set()
+            tts_stats = {
+                "enabled": self.tts_enabled,
+                "routed_to_tts": 0,
+                "resolved_by_tts": 0,
+                "fell_through": 0,
+            }
+
+            if self.tts_enabled:
+                job_manager.add_progress(job_id, "Checking The True Story news database...")
+                self._check_cancellation(job_id)
+
+                tts_start = time.time()
+
+                try:
+                    # Prepare claims for routing
+                    claims_for_router = [
+                        {"id": c.id, "statement": c.statement}
+                        for c in claims
+                    ]
+
+                    routing_decisions = await self.tts_router.route(
+                        claims=claims_for_router,
+                        content_language=content_location.language if content_location else "english",
+                        content_realm=content_location.country if content_location else "unknown",
+                    )
+
+                    tts_routed = [d for d in routing_decisions if d.route == "tts"]
+                    tts_stats["routed_to_tts"] = len(tts_routed)
+
+                    if tts_routed:
+                        job_manager.add_progress(
+                            job_id,
+                            f"Searching TTS for {len(tts_routed)}/{len(claims)} claims..."
+                        )
+
+                        async def check_tts_for_claim(decision):
+                            try:
+                                evidence = await self.tts_service.find_evidence_for_claim(
+                                    query=decision.tts_query,
+                                    edition=decision.tts_edition or "en",
+                                    min_cluster_size=3,
+                                    max_evidence_articles=5,
+                                )
+                                return (decision.claim_id, evidence)
+                            except Exception as e:
+                                fact_logger.logger.error(
+                                    f"TTS search error for {decision.claim_id}: {e}"
+                                )
+                                return (decision.claim_id, None)
+
+                        tts_tasks = [check_tts_for_claim(d) for d in tts_routed]
+                        tts_search_results = await asyncio.gather(
+                            *tts_tasks, return_exceptions=True
+                        )
+
+                        for result in tts_search_results:
+                            if isinstance(result, BaseException):
+                                continue
+
+                            claim_id, evidence = result
+                            if not evidence or not evidence.get("matched"):
+                                continue
+
+                            cluster_size = evidence.get("source_count", 0)
+                            if cluster_size < 3:
+                                continue
+
+                            claim_obj = next(
+                                (c for c in claims if c.id == claim_id), None
+                            )
+                            if not claim_obj:
+                                continue
+
+                            try:
+                                evidence_texts = evidence.get("evidence_texts", [])
+                                tts_excerpts = {}
+                                for et in evidence_texts:
+                                    src = et.get("source", "TTS")
+                                    txt = et.get("text", "")
+                                    if txt:
+                                        tts_excerpts[src] = txt
+
+                                if tts_excerpts:
+                                    # Create a fact-like object for the checker
+                                    fact_like = type('Fact', (), {
+                                        'id': claim_obj.id,
+                                        'statement': claim_obj.statement,
+                                    })()
+
+                                    tts_check_result = await self.checker.check_fact(
+                                        fact=fact_like,
+                                        excerpts=tts_excerpts,
+                                        source_metadata={},
+                                    )
+
+                                    tts_check_result.report = (
+                                        f"[TTS Layer 0 - {cluster_size} sources] "
+                                        f"{tts_check_result.report}"
+                                    )
+
+                                    tts_results.append(tts_check_result)
+                                    tts_resolved_ids.add(claim_id)
+
+                                    score_label = (
+                                        "verified" if tts_check_result.match_score >= 0.9
+                                        else "partially verified" if tts_check_result.match_score >= 0.7
+                                        else "low confidence"
+                                    )
+                                    job_manager.add_progress(
+                                        job_id,
+                                        f"TTS: {claim_id} {score_label} "
+                                        f"({tts_check_result.match_score:.0%}, "
+                                        f"{cluster_size} sources)"
+                                    )
+
+                            except Exception as e:
+                                fact_logger.logger.error(
+                                    f"TTS verification error for {claim_id}: {e}"
+                                )
+
+                    tts_stats["resolved_by_tts"] = len(tts_resolved_ids)
+                    tts_stats["fell_through"] = tts_stats["routed_to_tts"] - len(tts_resolved_ids)
+
+                    tts_duration = time.time() - tts_start
+                    tts_stats["duration"] = round(tts_duration, 2)
+
+                    job_manager.add_progress(
+                        job_id,
+                        f"TTS Layer 0: {len(tts_resolved_ids)} claims verified, "
+                        f"{len(claims) - len(tts_resolved_ids)} need web search "
+                        f"({tts_duration:.1f}s)"
+                    )
+
+                except Exception as e:
+                    fact_logger.logger.error(f"TTS Layer 0 error: {e}")
+                    job_manager.add_progress(
+                        job_id,
+                        "TTS Layer 0 unavailable, continuing with web search"
+                    )
+
+            # Filter out TTS-resolved claims
+            remaining_claims = [c for c in claims if c.id not in tts_resolved_ids]
+
+            if not remaining_claims:
+                # All claims resolved by TTS
+                job_manager.add_progress(
+                    job_id, "All claims verified via TTS - skipping web search"
+                )
+
+                processing_time = time.time() - start_time
+                summary = self._generate_summary(tts_results)
+
+                # Build early return (same structure as normal return)
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "facts": [
+                        {
+                            "id": r.fact_id,
+                            "statement": r.statement,
+                            "match_score": r.match_score,
+                            "confidence": r.confidence,
+                            "report": r.report,
+                        }
+                        for r in tts_results
+                    ],
+                    "summary": summary,
+                    "processing_time": processing_time,
+                    "methodology": "tts_verified",
+                    "tts_stats": tts_stats,
+                }
+
+            # ================================================================
             # STAGE 2: Generate Search Queries (PARALLEL)
             # ================================================================
             job_manager.add_progress(job_id, "Generating search queries in parallel...")
@@ -287,7 +480,7 @@ class KeyClaimsOrchestrator:
                 )
                 return (claim.id, queries)
 
-            query_tasks = [generate_queries_for_claim(claim) for claim in claims]
+            query_tasks = [generate_queries_for_claim(claim) for claim in remaining_claims]
             query_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
             # Process query results
@@ -344,7 +537,7 @@ class KeyClaimsOrchestrator:
 
                 return (claim.id, search_results, query_audits)
 
-            search_tasks = [search_for_claim(claim) for claim in claims]
+            search_tasks = [search_for_claim(claim) for claim in remaining_claims]
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
             # Process search results
@@ -404,7 +597,7 @@ class KeyClaimsOrchestrator:
 
                 return (claim.id, credible_urls, source_metadata, credibility_results)
 
-            filter_tasks = [filter_sources_for_claim(claim) for claim in claims]
+            filter_tasks = [filter_sources_for_claim(claim) for claim in remaining_claims]
             filter_results = await asyncio.gather(*filter_tasks, return_exceptions=True)
 
             # Process filter results
@@ -444,7 +637,7 @@ class KeyClaimsOrchestrator:
             all_urls_to_scrape = []
             url_to_claim_map = {}  # Track which claim each URL belongs to
 
-            for claim in claims:
+            for claim in remaining_claims:
                 urls = credible_urls_by_claim.get(claim.id, [])
                 for url in urls:
                     if url not in url_to_claim_map:
@@ -460,7 +653,7 @@ class KeyClaimsOrchestrator:
             scraped_urls_by_claim = {}
             scrape_errors_by_claim = {}
 
-            for claim in claims:
+            for claim in remaining_claims:
                 claim_urls = credible_urls_by_claim.get(claim.id, [])
                 scraped_content_by_claim[claim.id] = {
                     url: all_scraped_content.get(url)
@@ -485,7 +678,7 @@ class KeyClaimsOrchestrator:
             )
 
             # Build claim search audits
-            for claim in claims:
+            for claim in remaining_claims:
                 claim_audit = build_fact_search_audit(
                     fact_id=claim.id,
                     fact_statement=claim.statement,
@@ -499,7 +692,7 @@ class KeyClaimsOrchestrator:
             # ================================================================
             # STAGE 6: Verify Claims (PARALLEL)
             # ================================================================
-            job_manager.add_progress(job_id, f"Verifying {len(claims)} key claims in parallel...")
+            job_manager.add_progress(job_id, f"Verifying {len(remaining_claims)} key claims in parallel...")
             self._check_cancellation(job_id)
 
             verify_start = time.time()
@@ -556,7 +749,7 @@ class KeyClaimsOrchestrator:
                         report=f"Verification error: {str(e)}"
                     )
 
-            verify_tasks = [verify_single_claim(claim) for claim in claims]
+            verify_tasks = [verify_single_claim(claim) for claim in remaining_claims]
             results = await asyncio.gather(*verify_tasks, return_exceptions=True)
 
             # Process verification results
@@ -583,6 +776,9 @@ class KeyClaimsOrchestrator:
             # ================================================================
             # STAGE 7: Generate Summary and Save Audit
             # ================================================================
+            # Merge TTS-resolved results with web-search results
+            final_results = tts_results + final_results
+
             processing_time = time.time() - start_time
 
             # Save search audit
@@ -690,7 +886,8 @@ class KeyClaimsOrchestrator:
                     "credibility_filter": round(filter_duration, 2),
                     "scraping": round(scrape_duration, 2),
                     "verification": round(verify_duration, 2)
-                }
+                },
+                "tts_stats": tts_stats,
             }
 
             # Only mark job complete in standalone mode (not when run from comprehensive)
