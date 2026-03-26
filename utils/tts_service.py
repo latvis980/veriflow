@@ -485,6 +485,7 @@ class TTSService:
             evidence_texts.append({
                 "source": g.get("source_title", ""),
                 "title": re.sub(r'</?b>', '', g.get("title", "")),
+                "text": re.sub(r'</?b>', '', g.get("text", "")),
                 "url": g.get("url", ""),
             })
 

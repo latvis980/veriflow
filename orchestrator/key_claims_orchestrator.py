@@ -392,10 +392,23 @@ class KeyClaimsOrchestrator:
                                         'statement': claim_obj.statement,
                                     })()
 
+                                    # Build source_metadata entries for TTS sources
+                                    # (fact_checker expects a metadata dict per excerpt key)
+                                    tts_source_metadata = {}
+                                    for src_name in tts_excerpts:
+                                        tts_source_metadata[src_name] = {
+                                            "tier": 1,
+                                            "source_name": src_name,
+                                            "credibility_score": 0.9,
+                                            "bias_rating": "Unknown",
+                                            "factual_reporting": "High",
+                                            "source_type": "tts_cluster",
+                                        }
+
                                     tts_check_result = await self.checker.check_fact(
                                         fact=fact_like,
                                         excerpts=tts_excerpts,
-                                        source_metadata={},
+                                        source_metadata=tts_source_metadata,
                                     )
 
                                     tts_check_result.report = (
