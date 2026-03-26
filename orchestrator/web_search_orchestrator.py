@@ -327,7 +327,7 @@ class WebSearchOrchestrator:
                                     src = et.get("source", "TTS")
                                     txt = et.get("text", "")
                                     if txt:
-                                        tts_excerpts[src] = txt
+                                        tts_excerpts[src] = [{"quote": txt, "relevance": 1.0}]
 
                                 if tts_excerpts:
                                     # Use existing fact_checker with TTS evidence

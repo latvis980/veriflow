@@ -14,6 +14,7 @@ TTS covers: current news events (last ~6 months), with strong coverage of:
 - Major global economic events
 - War and military operations
 - Major social/protest movements
+- Big tech news with global impact
 
 TTS does NOT cover well:
 - Local/municipal news (unless internationally significant)
@@ -44,6 +45,7 @@ STRONG COVERAGE (high chance of finding relevant clusters):
 - War, military operations, ceasefire negotiations
 - Large-scale protests, regime changes, coups
 - UN, ICC, international law events
+- Big tech news likely to be covered by major outlets all over the world
 
 MODERATE COVERAGE:
 - Major terrorist attacks or mass casualty events
