@@ -40,6 +40,10 @@ from agents.query_generator import QueryGenerator
 from agents.credibility_filter import CredibilityFilter
 from agents.highlighter import Highlighter
 
+# TTS (The True Story) integration - Layer 0 verification
+from agents.tts_router import TTSRouter
+from utils.tts_service import TTSService
+
 # Import search audit utilities
 from utils.search_audit_builder import (
     build_session_search_audit,
@@ -72,6 +76,19 @@ class WebSearchOrchestrator:
         self.highlighter = Highlighter(config)
         self.checker = FactChecker(config)
         self.file_manager = FileManager()
+
+        # TTS (The True Story) - Layer 0 verification
+        # Provides pre-verified multi-source evidence for news claims
+        try:
+            self.tts_router = TTSRouter(config)
+            self.tts_service = TTSService()
+            self.tts_enabled = True
+            fact_logger.logger.info("TTS Layer 0 enabled")
+        except Exception as e:
+            self.tts_router = None
+            self.tts_service = None
+            self.tts_enabled = False
+            fact_logger.logger.warning(f"TTS Layer 0 not available: {e}")
 
         # Configuration
         self.max_sources_per_fact = 10  # Maximum sources to scrape per fact
@@ -198,6 +215,222 @@ class WebSearchOrchestrator:
                     )
 
             # ================================================================
+            # STAGE 1.5: TTS Layer 0 - Check The True Story (NEW)
+            # ================================================================
+            tts_results = []  # FactCheckResult objects from TTS
+            tts_resolved_ids = set()  # fact IDs resolved by TTS
+            tts_stats = {
+                "enabled": self.tts_enabled,
+                "routed_to_tts": 0,
+                "resolved_by_tts": 0,
+                "fell_through": 0,
+            }
+
+            if self.tts_enabled:
+                job_manager.add_progress(job_id, "Checking The True Story news database...")
+                self._check_cancellation(job_id)
+
+                tts_start = time.time()
+
+                try:
+                    # Prepare facts for routing
+                    facts_for_router = [
+                        {"id": f.id, "statement": f.statement}
+                        for f in facts
+                    ]
+
+                    # Route: which facts should check TTS?
+                    routing_decisions = await self.tts_router.route(
+                        claims=facts_for_router,
+                        content_language=content_location.language if content_location else "english",
+                        content_realm=content_location.country if content_location else "unknown",
+                    )
+
+                    # Collect TTS-routed facts
+                    tts_routed = [
+                        d for d in routing_decisions if d.route == "tts"
+                    ]
+                    tts_stats["routed_to_tts"] = len(tts_routed)
+
+                    if tts_routed:
+                        job_manager.add_progress(
+                            job_id,
+                            f"Searching TTS for {len(tts_routed)}/{len(facts)} facts..."
+                        )
+
+                        # Search TTS for each routed fact (parallel)
+                        async def check_tts_for_fact(decision):
+                            """Search TTS for a single fact"""
+                            try:
+                                evidence = await self.tts_service.find_evidence_for_claim(
+                                    query=decision.tts_query,
+                                    edition=decision.tts_edition or "en",
+                                    min_cluster_size=3,
+                                    max_evidence_articles=5,
+                                )
+                                return (decision.claim_id, evidence)
+                            except Exception as e:
+                                fact_logger.logger.error(
+                                    f"TTS search error for {decision.claim_id}: {e}"
+                                )
+                                return (decision.claim_id, None)
+
+                        tts_tasks = [check_tts_for_fact(d) for d in tts_routed]
+                        tts_search_results = await asyncio.gather(
+                            *tts_tasks, return_exceptions=True
+                        )
+
+                        # Process TTS results -> FactCheckResult
+                        for result in tts_search_results:
+                            if isinstance(result, BaseException):
+                                continue
+
+                            fact_id, evidence = result
+                            if not evidence or not evidence.get("matched"):
+                                continue
+
+                            cluster_size = evidence.get("source_count", 0)
+                            if cluster_size < 3:
+                                continue
+
+                            # Build evidence text for the fact checker
+                            evidence_texts = evidence.get("evidence_texts", [])
+                            story_sources = evidence.get("story_sources", [])
+
+                            # Construct a verification report from TTS data
+                            source_list = ", ".join(
+                                s.get("source", "Unknown")
+                                for s in (story_sources or evidence_texts)[:5]
+                            )
+                            cluster_title = evidence.get("cluster_title", "")
+
+                            report = (
+                                f"Verified via The True Story news database. "
+                                f"This claim matches a news cluster with "
+                                f"{cluster_size} independent sources. "
+                                f"Cluster: \"{cluster_title}\". "
+                                f"Sources include: {source_list}."
+                            )
+
+                            # Now use the LLM fact checker with TTS evidence
+                            # to get a proper match_score (not just a binary yes/no)
+                            fact_obj = next(
+                                (f for f in facts if f.id == fact_id), None
+                            )
+                            if not fact_obj:
+                                continue
+
+                            try:
+                                # Build excerpts from TTS article texts
+                                tts_excerpts = {}
+                                for et in evidence_texts:
+                                    src = et.get("source", "TTS")
+                                    txt = et.get("text", "")
+                                    if txt:
+                                        tts_excerpts[src] = txt
+
+                                if tts_excerpts:
+                                    # Use existing fact_checker with TTS evidence
+                                    tts_check_result = await self.checker.check_fact(
+                                        fact=fact_obj,
+                                        excerpts=tts_excerpts,
+                                        source_metadata={},
+                                    )
+
+                                    # Enrich the report with TTS provenance
+                                    tts_check_result.report = (
+                                        f"[TTS Layer 0 - {cluster_size} sources] "
+                                        f"{tts_check_result.report}"
+                                    )
+
+                                    tts_results.append(tts_check_result)
+                                    tts_resolved_ids.add(fact_id)
+
+                                    score_label = (
+                                        "verified" if tts_check_result.match_score >= 0.9
+                                        else "partially verified" if tts_check_result.match_score >= 0.7
+                                        else "low confidence"
+                                    )
+
+                                    job_manager.add_progress(
+                                        job_id,
+                                        f"TTS: {fact_id} {score_label} "
+                                        f"({tts_check_result.match_score:.0%}, "
+                                        f"{cluster_size} sources)"
+                                    )
+                                else:
+                                    # TTS matched but no usable text - fall through
+                                    pass
+
+                            except Exception as e:
+                                fact_logger.logger.error(
+                                    f"TTS verification error for {fact_id}: {e}"
+                                )
+                                # Fall through to web search
+
+                    tts_stats["resolved_by_tts"] = len(tts_resolved_ids)
+                    tts_stats["fell_through"] = tts_stats["routed_to_tts"] - len(tts_resolved_ids)
+
+                    tts_duration = time.time() - tts_start
+                    tts_stats["duration"] = round(tts_duration, 2)
+
+                    job_manager.add_progress(
+                        job_id,
+                        f"TTS Layer 0: {len(tts_resolved_ids)} facts verified, "
+                        f"{len(facts) - len(tts_resolved_ids)} need web search "
+                        f"({tts_duration:.1f}s)"
+                    )
+
+                except Exception as e:
+                    fact_logger.logger.error(f"TTS Layer 0 error: {e}")
+                    job_manager.add_progress(
+                        job_id,
+                        "TTS Layer 0 unavailable, continuing with web search"
+                    )
+
+            # Filter out TTS-resolved facts from the web search pipeline
+            remaining_facts = [f for f in facts if f.id not in tts_resolved_ids]
+
+            if not remaining_facts:
+                # ALL facts resolved by TTS - skip entire web search pipeline
+                job_manager.add_progress(
+                    job_id,
+                    "All facts verified via TTS - skipping web search"
+                )
+
+                processing_time = time.time() - start_time
+                summary = self._generate_summary(tts_results)
+
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "facts": [
+                        {
+                            "id": r.fact_id,
+                            "statement": r.statement,
+                            "match_score": r.match_score,
+                            "confidence": r.confidence,
+                            "report": r.report,
+                            "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None
+                        }
+                        for r in tts_results
+                    ],
+                    "summary": summary,
+                    "processing_time": processing_time,
+                    "methodology": "tts_verified",
+                    "content_location": {
+                        "country": content_location.country,
+                        "language": content_location.language
+                    } if content_location else None,
+                    "statistics": {
+                        "facts_extracted": len(facts),
+                        "tts_resolved": len(tts_resolved_ids),
+                        "web_search_needed": 0,
+                    },
+                    "tts_stats": tts_stats,
+                }
+
+            # ================================================================
             # STAGE 2: Generate Search Queries ( PARALLEL)
             # ================================================================
             job_manager.add_progress(job_id, "Generating search queries in parallel...")
@@ -214,7 +447,7 @@ class WebSearchOrchestrator:
                 )
                 return (fact.id, queries)
 
-            query_tasks = [generate_queries_for_fact(fact) for fact in facts]
+            query_tasks = [generate_queries_for_fact(fact) for fact in remaining_facts]
             query_results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
             # Process query results
@@ -274,7 +507,7 @@ class WebSearchOrchestrator:
 
                 return (fact.id, search_results, query_audits)
 
-            search_tasks = [search_for_fact(fact) for fact in facts]
+            search_tasks = [search_for_fact(fact) for fact in remaining_facts]
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
             # Process search results
@@ -328,7 +561,7 @@ class WebSearchOrchestrator:
 
                 return (fact.id, credible_urls, credibility_results)
 
-            filter_tasks = [filter_sources_for_fact(fact) for fact in facts]
+            filter_tasks = [filter_sources_for_fact(fact) for fact in remaining_facts]
             filter_results = await asyncio.gather(*filter_tasks, return_exceptions=True)
 
             # Process filter results
@@ -366,7 +599,7 @@ class WebSearchOrchestrator:
             all_urls_to_scrape = []
             url_to_fact_map = {}  # Track which fact each URL belongs to
 
-            for fact in facts:
+            for fact in remaining_facts:
                 urls = credible_urls_by_fact.get(fact.id, [])
                 for url in urls:
                     if url not in url_to_fact_map:
@@ -382,7 +615,7 @@ class WebSearchOrchestrator:
             scraped_urls_by_fact = {}
             scrape_errors_by_fact = {}
 
-            for fact in facts:
+            for fact in remaining_facts:
                 fact_urls = credible_urls_by_fact.get(fact.id, [])
                 scraped_content_by_fact[fact.id] = {
                     url: all_scraped_content.get(url)
@@ -407,7 +640,7 @@ class WebSearchOrchestrator:
             )
 
             # Build fact search audits
-            for fact in facts:
+            for fact in remaining_facts:
                 fact_audit = build_fact_search_audit(
                     fact_id=fact.id,
                     fact_statement=fact.statement,
@@ -423,7 +656,7 @@ class WebSearchOrchestrator:
             # ================================================================
             job_manager.add_progress(
                 job_id,
-                f"Verifying {len(facts)} facts in parallel..."
+                f"Verifying {len(remaining_facts)} facts in parallel..."
             )
             self._check_cancellation(job_id)
 
@@ -478,7 +711,7 @@ class WebSearchOrchestrator:
                         report=f"Verification error: {str(e)}"
                     )
 
-            verify_tasks = [verify_single_fact(fact) for fact in facts]
+            verify_tasks = [verify_single_fact(fact) for fact in remaining_facts]
             results = await asyncio.gather(*verify_tasks, return_exceptions=True)
 
             # Process verification results
@@ -489,6 +722,9 @@ class WebSearchOrchestrator:
                     continue
                 final_results.append(result)
 
+            # Merge TTS-resolved results with web search results
+            final_results = tts_results + final_results
+
             verify_duration = time.time() - verify_start
             job_manager.add_progress(job_id, f"All facts verified in {verify_duration:.1f}s")
 
@@ -496,6 +732,13 @@ class WebSearchOrchestrator:
             if not using_shared_scraper:
                 try:
                     await scraper.close()
+                except Exception:
+                    pass
+
+            # Close TTS service
+            if self.tts_enabled and self.tts_service:
+                try:
+                    await self.tts_service.close()
                 except Exception:
                     pass
 
@@ -565,11 +808,13 @@ class WebSearchOrchestrator:
                 } if content_location else None,
                 "statistics": {
                     "facts_extracted": len(facts),
+                    "tts_resolved": len(tts_resolved_ids),
                     "queries_generated": total_queries,
                     "raw_results_found": total_results,
                     "credible_sources": total_credible,
                     "facts_verified": len(final_results)
                 },
+                "tts_stats": tts_stats,
                 "audit": {
                     "local_path": audit_file_path,
                     "r2_url": audit_r2_url,
@@ -591,6 +836,7 @@ class WebSearchOrchestrator:
                     "url": audit_r2_url
                 },
                 "performance": {
+                    "tts_layer": tts_stats.get("duration", 0),
                     "query_generation": round(query_gen_duration, 2),
                     "web_search": round(search_duration, 2),
                     "credibility_filter": round(filter_duration, 2),
