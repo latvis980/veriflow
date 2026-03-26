@@ -4,15 +4,13 @@ TTS Router Agent
 Determines which claims should be checked against The True Story (TTS)
 news aggregation platform before falling back to standard web search.
 
-Uses Gemini 2.0 Flash for fast, cheap classification.
-Falls back to OpenAI gpt-4o-mini if Gemini is not available.
+Uses OpenAI GPT-5.4 nano for fast, cheap classification/routing.
 """
 
 import json
-import os
+import asyncio
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-import asyncio
 
 from langchain.prompts import ChatPromptTemplate
 from langsmith import traceable
@@ -36,8 +34,8 @@ class TTSRouter:
     """
     Routes claims to TTS or web search based on content analysis.
 
-    Uses Gemini 2.0 Flash for speed and cost efficiency.
-    Falls back to OpenAI gpt-4o-mini if Gemini is not available.
+    Uses OpenAI GPT-5.4 nano -- fastest, cheapest model,
+    optimized for classification, extraction, and routing tasks.
     """
 
     def __init__(self, config=None):
@@ -46,47 +44,18 @@ class TTSRouter:
 
         fact_logger.logger.info("TTSRouter: initializing...")
 
-        # Try Gemini Flash first (Phase 6 optimization)
-        gemini_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if gemini_key:
-            try:
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                self.llm = ChatGoogleGenerativeAI(
-                    model="gemini-2.0-flash",
-                    temperature=0.0,
-                    max_output_tokens=2000,
-                    google_api_key=gemini_key,
-                )
-                fact_logger.logger.info("TTSRouter: using Gemini 2.0 Flash")
-            except ImportError:
-                fact_logger.logger.warning(
-                    "TTSRouter: langchain-google-genai not installed, "
-                    "trying OpenAI fallback"
-                )
-            except Exception as e:
-                fact_logger.logger.warning(
-                    f"TTSRouter: Gemini init failed: {e}, trying OpenAI fallback"
-                )
-        else:
-            fact_logger.logger.info(
-                "TTSRouter: no GOOGLE_API_KEY/GEMINI_API_KEY, using OpenAI"
-            )
-
-        # Fallback to OpenAI gpt-4o-mini
-        if self.llm is None:
-            try:
-                from langchain_openai import ChatOpenAI
-                self.llm = ChatOpenAI(
-                    model="gpt-4o-mini",
-                    temperature=0.0,
-                    max_tokens=2000,
-                ).bind(response_format={"type": "json_object"})
-                fact_logger.logger.info("TTSRouter: using OpenAI gpt-4o-mini (fallback)")
-            except Exception as e:
-                fact_logger.logger.error(f"TTSRouter: OpenAI fallback also failed: {e}")
-                raise RuntimeError(
-                    "TTSRouter: no LLM available (need GOOGLE_API_KEY or OPENAI_API_KEY)"
-                )
+        # GPT-5.4 nano: fastest, cheapest, built for classification/routing
+        try:
+            from langchain_openai import ChatOpenAI
+            self.llm = ChatOpenAI(
+                model="gpt-5.4-nano",
+                temperature=0.0,
+                max_tokens=2000,
+            ).bind(response_format={"type": "json_object"})
+            fact_logger.logger.info("TTSRouter: using OpenAI gpt-5.4-nano")
+        except Exception as e:
+            fact_logger.logger.error(f"TTSRouter: init failed: {e}")
+            raise RuntimeError("TTSRouter: no LLM available")
 
         prompts = get_tts_router_prompts()
         self.prompt = ChatPromptTemplate.from_messages([
