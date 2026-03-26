@@ -1,0 +1,355 @@
+# ============================================================================
+# CHANGES TO: orchestrator/web_search_orchestrator.py
+# 
+# This file contains the exact code changes needed to wire TTS into the
+# web search orchestrator. Apply these as surgical edits to the existing file.
+#
+# Summary of changes:
+#   1. Add imports (top of file)
+#   2. Add TTS initialization in __init__
+#   3. Add new Stage 1.5 between fact extraction and query generation
+#   4. Split facts into tts_resolved vs web_search_needed
+#   5. Merge results at the end
+#   6. Add TTS stats to the return dict
+# ============================================================================
+ 
+ 
+# ============================================================================
+# CHANGE 1: Add imports (after existing imports at top of file)
+# ============================================================================
+# Add these lines after the existing import block:
+ 
+# TTS (The True Story) integration - Layer 0 verification
+from agents.tts_router import TTSRouter
+from utils.tts_service import TTSService
+from agents.fact_checker import FactCheckResult  # already imported, just noting
+ 
+ 
+# ============================================================================
+# CHANGE 2: Add TTS initialization in __init__ (after self.file_manager)
+# ============================================================================
+# Add these lines inside __init__, after self.file_manager = FileManager():
+ 
+        # TTS (The True Story) - Layer 0 verification
+        # Provides pre-verified multi-source evidence for news claims
+        try:
+            self.tts_router = TTSRouter(config)
+            self.tts_service = TTSService()
+            self.tts_enabled = True
+            fact_logger.logger.info("TTS Layer 0 enabled")
+        except Exception as e:
+            self.tts_router = None
+            self.tts_service = None
+            self.tts_enabled = False
+            fact_logger.logger.warning(f"TTS Layer 0 not available: {e}")
+ 
+ 
+# ============================================================================
+# CHANGE 3: Add Stage 1.5 inside process_with_progress()
+#
+# Insert this block AFTER Stage 1 (fact extraction + location detection)
+# and BEFORE Stage 2 (query generation).
+#
+# The key idea: facts resolved by TTS produce FactCheckResult objects
+# immediately. Only unresolved facts continue to Stage 2+.
+# ============================================================================
+ 
+            # ================================================================
+            # STAGE 1.5: TTS Layer 0 - Check The True Story (NEW)
+            # ================================================================
+            tts_results = []  # FactCheckResult objects from TTS
+            tts_resolved_ids = set()  # fact IDs resolved by TTS
+            tts_stats = {
+                "enabled": self.tts_enabled,
+                "routed_to_tts": 0,
+                "resolved_by_tts": 0,
+                "fell_through": 0,
+            }
+ 
+            if self.tts_enabled:
+                job_manager.add_progress(job_id, "Checking The True Story news database...")
+                self._check_cancellation(job_id)
+ 
+                tts_start = time.time()
+ 
+                try:
+                    # Prepare facts for routing
+                    facts_for_router = [
+                        {"id": f.id, "statement": f.statement}
+                        for f in facts
+                    ]
+ 
+                    # Route: which facts should check TTS?
+                    routing_decisions = await self.tts_router.route(
+                        claims=facts_for_router,
+                        content_language=content_location.language if content_location else "english",
+                        content_realm=content_location.country if content_location else "unknown",
+                    )
+ 
+                    # Collect TTS-routed facts
+                    tts_routed = [
+                        d for d in routing_decisions if d.route == "tts"
+                    ]
+                    tts_stats["routed_to_tts"] = len(tts_routed)
+ 
+                    if tts_routed:
+                        job_manager.add_progress(
+                            job_id,
+                            f"Searching TTS for {len(tts_routed)}/{len(facts)} facts..."
+                        )
+ 
+                        # Search TTS for each routed fact (parallel)
+                        async def check_tts_for_fact(decision):
+                            """Search TTS for a single fact"""
+                            try:
+                                evidence = await self.tts_service.find_evidence_for_claim(
+                                    query=decision.tts_query,
+                                    edition=decision.tts_edition or "en",
+                                    min_cluster_size=3,
+                                    max_evidence_articles=5,
+                                )
+                                return (decision.claim_id, evidence)
+                            except Exception as e:
+                                fact_logger.logger.error(
+                                    f"TTS search error for {decision.claim_id}: {e}"
+                                )
+                                return (decision.claim_id, None)
+ 
+                        tts_tasks = [check_tts_for_fact(d) for d in tts_routed]
+                        tts_search_results = await asyncio.gather(
+                            *tts_tasks, return_exceptions=True
+                        )
+ 
+                        # Process TTS results -> FactCheckResult
+                        for result in tts_search_results:
+                            if isinstance(result, BaseException):
+                                continue
+ 
+                            fact_id, evidence = result
+                            if not evidence or not evidence.get("matched"):
+                                continue
+ 
+                            cluster_size = evidence.get("source_count", 0)
+                            if cluster_size < 3:
+                                continue
+ 
+                            # Build evidence text for the fact checker
+                            evidence_texts = evidence.get("evidence_texts", [])
+                            story_sources = evidence.get("story_sources", [])
+ 
+                            # Construct a verification report from TTS data
+                            source_list = ", ".join(
+                                s.get("source", "Unknown")
+                                for s in (story_sources or evidence_texts)[:5]
+                            )
+                            cluster_title = evidence.get("cluster_title", "")
+ 
+                            report = (
+                                f"Verified via The True Story news database. "
+                                f"This claim matches a news cluster with "
+                                f"{cluster_size} independent sources. "
+                                f"Cluster: \"{cluster_title}\". "
+                                f"Sources include: {source_list}."
+                            )
+ 
+                            # Now use the LLM fact checker with TTS evidence
+                            # to get a proper match_score (not just a binary yes/no)
+                            fact_obj = next(
+                                (f for f in facts if f.id == fact_id), None
+                            )
+                            if not fact_obj:
+                                continue
+ 
+                            try:
+                                # Build excerpts from TTS article texts
+                                tts_excerpts = {}
+                                for et in evidence_texts:
+                                    src = et.get("source", "TTS")
+                                    txt = et.get("text", "")
+                                    if txt:
+                                        tts_excerpts[src] = txt
+ 
+                                if tts_excerpts:
+                                    # Use existing fact_checker with TTS evidence
+                                    tts_check_result = await self.checker.check_fact(
+                                        fact=fact_obj,
+                                        excerpts=tts_excerpts,
+                                        source_metadata={},
+                                    )
+ 
+                                    # Enrich the report with TTS provenance
+                                    tts_check_result.report = (
+                                        f"[TTS Layer 0 - {cluster_size} sources] "
+                                        f"{tts_check_result.report}"
+                                    )
+ 
+                                    tts_results.append(tts_check_result)
+                                    tts_resolved_ids.add(fact_id)
+ 
+                                    score_label = (
+                                        "verified" if tts_check_result.match_score >= 0.9
+                                        else "partially verified" if tts_check_result.match_score >= 0.7
+                                        else "low confidence"
+                                    )
+ 
+                                    job_manager.add_progress(
+                                        job_id,
+                                        f"TTS: {fact_id} {score_label} "
+                                        f"({tts_check_result.match_score:.0%}, "
+                                        f"{cluster_size} sources)"
+                                    )
+                                else:
+                                    # TTS matched but no usable text - fall through
+                                    pass
+ 
+                            except Exception as e:
+                                fact_logger.logger.error(
+                                    f"TTS verification error for {fact_id}: {e}"
+                                )
+                                # Fall through to web search
+ 
+                    tts_stats["resolved_by_tts"] = len(tts_resolved_ids)
+                    tts_stats["fell_through"] = tts_stats["routed_to_tts"] - len(tts_resolved_ids)
+ 
+                    tts_duration = time.time() - tts_start
+                    tts_stats["duration"] = round(tts_duration, 2)
+ 
+                    job_manager.add_progress(
+                        job_id,
+                        f"TTS Layer 0: {len(tts_resolved_ids)} facts verified, "
+                        f"{len(facts) - len(tts_resolved_ids)} need web search "
+                        f"({tts_duration:.1f}s)"
+                    )
+ 
+                except Exception as e:
+                    fact_logger.logger.error(f"TTS Layer 0 error: {e}")
+                    job_manager.add_progress(
+                        job_id,
+                        "TTS Layer 0 unavailable, continuing with web search"
+                    )
+ 
+            # Filter out TTS-resolved facts from the web search pipeline
+            remaining_facts = [f for f in facts if f.id not in tts_resolved_ids]
+ 
+            if not remaining_facts:
+                # ALL facts resolved by TTS - skip entire web search pipeline
+                job_manager.add_progress(
+                    job_id,
+                    "All facts verified via TTS - skipping web search"
+                )
+ 
+                processing_time = time.time() - start_time
+                summary = self._generate_summary(tts_results)
+ 
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "facts": [
+                        {
+                            "id": r.fact_id,
+                            "statement": r.statement,
+                            "match_score": r.match_score,
+                            "confidence": r.confidence,
+                            "report": r.report,
+                            "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None
+                        }
+                        for r in tts_results
+                    ],
+                    "summary": summary,
+                    "processing_time": processing_time,
+                    "methodology": "tts_verified",
+                    "content_location": {
+                        "country": content_location.country,
+                        "language": content_location.language
+                    } if content_location else None,
+                    "statistics": {
+                        "facts_extracted": len(facts),
+                        "tts_resolved": len(tts_resolved_ids),
+                        "web_search_needed": 0,
+                    },
+                    "tts_stats": tts_stats,
+                }
+ 
+ 
+# ============================================================================
+# CHANGE 4: Replace 'facts' with 'remaining_facts' in Stages 2-6
+#
+# In all the existing Stage 2-6 code, change:
+#   facts  ->  remaining_facts
+#
+# This is a simple search-and-replace within the stages.
+# Specifically, change these lines:
+#
+# Stage 2: query_tasks = [generate_queries_for_fact(fact) for fact in facts]
+#   ->      query_tasks = [generate_queries_for_fact(fact) for fact in remaining_facts]
+#
+# Stage 3: search_tasks = [search_for_fact(fact) for fact in facts]
+#   ->      search_tasks = [search_for_fact(fact) for fact in remaining_facts]
+#
+# Stage 4: filter_tasks = [filter_sources_for_fact(fact) for fact in facts]
+#   ->      filter_tasks = [filter_sources_for_fact(fact) for fact in remaining_facts]
+#
+# Stage 5: (the batch scraping loop iterates over fact-level data, 
+#           which is already keyed by fact_id, so no change needed)
+#
+# Stage 5 audit loop: for fact in facts:
+#   ->                 for fact in remaining_facts:
+#
+# Stage 6: verify_tasks = [verify_single_fact(fact) for fact in facts]
+#   ->      verify_tasks = [verify_single_fact(fact) for fact in remaining_facts]
+# ============================================================================
+ 
+ 
+# ============================================================================
+# CHANGE 5: Merge TTS + web search results in Stage 7
+#
+# In Stage 7, right after verify results are collected into final_results,
+# add the TTS results:
+# ============================================================================
+ 
+            # Merge TTS-resolved results with web search results
+            final_results = tts_results + final_results
+ 
+ 
+# ============================================================================
+# CHANGE 6: Add TTS stats to the return dict
+#
+# In the final return dict, add these fields alongside existing ones:
+# ============================================================================
+ 
+                # Inside the return dict, add:
+                "tts_stats": tts_stats,
+ 
+                # Update the statistics section:
+                "statistics": {
+                    "facts_extracted": len(facts),
+                    "tts_resolved": len(tts_resolved_ids),
+                    "queries_generated": total_queries,
+                    "raw_results_found": total_results,
+                    "credible_sources": total_credible,
+                    "facts_verified": len(final_results),
+                },
+ 
+                # Update the performance section:
+                "performance": {
+                    "tts_layer": tts_stats.get("duration", 0),
+                    "query_generation": round(query_gen_duration, 2),
+                    "web_search": round(search_duration, 2),
+                    "credibility_filter": round(filter_duration, 2),
+                    "scraping": round(scrape_duration, 2),
+                    "verification": round(verify_duration, 2),
+                },
+ 
+ 
+# ============================================================================
+# CHANGE 7: Close TTS service on cleanup
+#
+# If the orchestrator has a close/cleanup method, add:
+# ============================================================================
+ 
+        # In any cleanup/close method:
+        if self.tts_enabled and self.tts_service:
+            try:
+                await self.tts_service.close()
+            except Exception:
+                pass
