@@ -12,6 +12,7 @@ import json
 import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+import asyncio
 
 from langchain.prompts import ChatPromptTemplate
 from langsmith import traceable
@@ -145,11 +146,32 @@ class TTSRouter:
             fact_logger.logger.info("TTSRouter: calling LLM for routing decisions...")
 
             chain = self.prompt | self.llm
-            response = await chain.ainvoke({
-                "claims_text": claims_text,
-                "language": content_language,
-                "realm": content_realm,
-            })
+
+            # Timeout: if LLM doesn't respond in 15s, fall back to web search
+            try:
+                response = await asyncio.wait_for(
+                    chain.ainvoke({
+                        "claims_text": claims_text,
+                        "language": content_language,
+                        "realm": content_realm,
+                    }),
+                    timeout=15.0
+                )
+            except asyncio.TimeoutError:
+                fact_logger.logger.error(
+                    "TTSRouter: LLM call timed out after 15s"
+                )
+                return [
+                    TTSRoutingDecision(
+                        claim_id=c.get("id", f"fact{i+1}"),
+                        route="skip",
+                        reason="router timeout, falling back to web search",
+                        tts_query=None,
+                        tts_edition=None,
+                        confidence=0.0,
+                    )
+                    for i, c in enumerate(claims)
+                ]
 
             fact_logger.logger.info("TTSRouter: LLM response received")
             fact_logger.logger.debug(
