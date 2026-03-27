@@ -53,6 +53,17 @@ from utils.search_audit_builder import (
     upload_search_audit_to_r2
 )
 
+# Import TTS audit utilities
+from utils.tts_audit_builder import (
+    build_tts_session_audit,
+    build_routing_audit,
+    build_claim_audit_from_evidence,
+    build_skipped_claim_audit,
+    build_failed_claim_audit,
+    save_tts_audit,
+    upload_tts_audit_to_r2,
+)
+
 
 class WebSearchOrchestrator:
     """
@@ -201,6 +212,14 @@ class WebSearchOrchestrator:
                 content_language=content_location.language if content_location else "english"
             )
 
+            tts_session_audit = build_tts_session_audit(
+                session_id=session_id,
+                pipeline_type="web_search",
+                content_country=content_location.country if content_location else "international",
+                content_language=content_location.language if content_location else "english",
+                tts_enabled=self.tts_enabled,
+            )
+
             # Log detected location
             if content_location and content_location.country != "international":
                 if content_location.language != "english":
@@ -246,6 +265,26 @@ class WebSearchOrchestrator:
                         content_realm=content_location.country if content_location else "unknown",
                     )
 
+                    # Build a lookup: claim_id -> routing_decision
+                    routing_lookup = {}
+                    for d in routing_decisions:
+                        routing_lookup[d.claim_id] = d
+
+                    # Record skipped claims in TTS audit
+                    skipped_decisions = [d for d in routing_decisions if d.route == "skip"]
+                    for d in skipped_decisions:
+                        claim_obj = next(
+                            (f for f in facts if f.id == d.claim_id), None
+                        )
+                        if claim_obj:
+                            tts_session_audit.add_claim_audit(
+                                build_skipped_claim_audit(
+                                    claim_id=d.claim_id,
+                                    claim_statement=claim_obj.statement,
+                                    routing_decision=d,
+                                )
+                            )
+
                     # Collect TTS-routed facts
                     tts_routed = [
                         d for d in routing_decisions if d.route == "tts"
@@ -287,10 +326,34 @@ class WebSearchOrchestrator:
 
                             fact_id, evidence = result
                             if not evidence or not evidence.get("matched"):
+                                # --- TTS Audit: record fell-through (no match) ---
+                                ft_claim = next((f for f in facts if f.id == fact_id), None)
+                                if ft_claim:
+                                    tts_session_audit.add_claim_audit(
+                                        build_failed_claim_audit(
+                                            claim_id=fact_id,
+                                            claim_statement=ft_claim.statement,
+                                            routing_decision=routing_lookup.get(fact_id),
+                                            evidence=evidence,
+                                            reason="No TTS match found",
+                                        )
+                                    )
                                 continue
 
                             cluster_size = evidence.get("source_count", 0)
                             if cluster_size < 3:
+                                # --- TTS Audit: record fell-through (cluster too small) ---
+                                ft_claim = next((f for f in facts if f.id == fact_id), None)
+                                if ft_claim:
+                                    tts_session_audit.add_claim_audit(
+                                        build_failed_claim_audit(
+                                            claim_id=fact_id,
+                                            claim_statement=ft_claim.statement,
+                                            routing_decision=routing_lookup.get(fact_id),
+                                            evidence=evidence,
+                                            reason=f"Cluster too small: {cluster_size} < 3",
+                                        )
+                                    )
                                 continue
 
                             # Build evidence text for the fact checker
@@ -337,6 +400,10 @@ class WebSearchOrchestrator:
                                         source_metadata={},
                                     )
 
+                                    # Capture LLM score before boost
+                                    original_llm_score = tts_check_result.match_score
+                                    original_llm_report = tts_check_result.report
+
                                     # Apply cluster-size boost
                                     from utils.tts_service import apply_tts_cluster_boost
                                     adjusted_score, adjusted_report = apply_tts_cluster_boost(
@@ -351,6 +418,21 @@ class WebSearchOrchestrator:
 
                                     tts_results.append(tts_check_result)
                                     tts_resolved_ids.add(fact_id)
+
+                                    # --- TTS Audit: record resolved claim ---
+                                    tts_session_audit.add_claim_audit(
+                                        build_claim_audit_from_evidence(
+                                            claim_id=fact_id,
+                                            claim_statement=fact_obj.statement,
+                                            routing_decision=routing_lookup.get(fact_id),
+                                            evidence=evidence,
+                                            llm_match_score=original_llm_score,
+                                            llm_report=original_llm_report,
+                                            adjusted_match_score=tts_check_result.match_score,
+                                            adjusted_report=tts_check_result.report,
+                                            resolved=True,
+                                        )
+                                    )
 
                                     score_label = (
                                         "verified" if tts_check_result.match_score >= 0.9
@@ -379,6 +461,7 @@ class WebSearchOrchestrator:
 
                     tts_duration = time.time() - tts_start
                     tts_stats["duration"] = round(tts_duration, 2)
+                    tts_session_audit.tts_duration_seconds = tts_duration
 
                     job_manager.add_progress(
                         job_id,
@@ -774,6 +857,26 @@ class WebSearchOrchestrator:
                     pipeline_type="web-search"
                 )
 
+            # Save TTS audit
+            tts_audit_file_path = None
+            tts_audit_r2_url = None
+
+            if tts_session_audit.total_claims > 0:
+                tts_audit_file_path = save_tts_audit(
+                    tts_audit=tts_session_audit,
+                    file_manager=self.file_manager,
+                    session_id=session_id,
+                    filename="tts_audit.json",
+                )
+
+                if self.r2_enabled and self.r2_uploader:
+                    tts_audit_r2_url = await upload_tts_audit_to_r2(
+                        tts_audit=tts_session_audit,
+                        session_id=session_id,
+                        r2_uploader=self.r2_uploader,
+                        pipeline_type="web-search",
+                    )
+
             job_manager.add_progress(job_id, f"Complete in {processing_time:.1f}s")
 
             # Log performance metrics
@@ -837,6 +940,11 @@ class WebSearchOrchestrator:
                         }
                     }
                 },
+                "tts_audit": {
+                    "local_path": tts_audit_file_path,
+                    "r2_url": tts_audit_r2_url,
+                    "summary": tts_session_audit.to_dict()["summary"] if tts_session_audit.total_claims > 0 else None,
+                },
                 "r2_upload": {
                     "success": audit_r2_url is not None,
                     "url": audit_r2_url
@@ -875,6 +983,17 @@ class WebSearchOrchestrator:
                         file_manager=self.file_manager,
                         session_id=session_id,
                         filename="search_audit_partial.json"
+                    )
+                except:
+                    pass
+
+            if tts_session_audit and tts_session_audit.total_claims > 0:
+                try:
+                    save_tts_audit(
+                        tts_audit=tts_session_audit,
+                        file_manager=self.file_manager,
+                        session_id=session_id,
+                        filename="tts_audit_partial.json",
                     )
                 except:
                     pass
