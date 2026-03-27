@@ -1,0 +1,211 @@
+# TTS Audit Integration Guide
+# ============================
+#
+# This file shows the exact changes needed in both orchestrators
+# to wire up the TTS audit system.
+#
+# Files to modify:
+#   1. orchestrator/web_search_orchestrator.py
+#   2. orchestrator/key_claims_orchestrator.py
+#
+# Files to add (already created):
+#   - utils/tts_audit.py
+#   - utils/tts_audit_builder.py
+ 
+ 
+# ============================================================================
+# CHANGE 1: Add imports (both orchestrators, near the top)
+# ============================================================================
+#
+# Add these imports alongside the existing search_audit_builder imports:
+#
+#   from utils.tts_audit_builder import (
+#       build_tts_session_audit,
+#       build_routing_audit,
+#       build_claim_audit_from_evidence,
+#       build_skipped_claim_audit,
+#       build_failed_claim_audit,
+#       save_tts_audit,
+#       upload_tts_audit_to_r2,
+#   )
+ 
+ 
+# ============================================================================
+# CHANGE 2: Initialize TTS audit (right after session_audit is created)
+# ============================================================================
+#
+# In both orchestrators, right after the line:
+#     session_audit = build_session_search_audit(...)
+#
+# Add:
+#
+#     tts_session_audit = build_tts_session_audit(
+#         session_id=session_id,
+#         pipeline_type="web_search",  # or "key_claims"
+#         content_country=content_location.country if content_location else "international",
+#         content_language=content_location.language if content_location else "english",
+#         tts_enabled=self.tts_enabled,
+#     )
+ 
+ 
+# ============================================================================
+# CHANGE 3: Record routing decisions (after routing_decisions are received)
+# ============================================================================
+#
+# After the line:
+#     routing_decisions = await self.tts_router.route(...)
+#
+# Add audit entries for ALL claims (both tts-routed and skipped):
+#
+#     # Build a lookup: claim_id -> routing_decision
+#     routing_lookup = {}
+#     for d in routing_decisions:
+#         routing_lookup[d.claim_id] = d
+#
+#     # Record skipped claims in TTS audit
+#     skipped_decisions = [d for d in routing_decisions if d.route == "skip"]
+#     for d in skipped_decisions:
+#         # Find the claim statement
+#         claim_obj = next(
+#             (f for f in facts if f.id == d.claim_id), None  # or claims for key_claims
+#         )
+#         if claim_obj:
+#             tts_session_audit.add_claim_audit(
+#                 build_skipped_claim_audit(
+#                     claim_id=d.claim_id,
+#                     claim_statement=claim_obj.statement,
+#                     routing_decision=d,
+#                 )
+#             )
+ 
+ 
+# ============================================================================
+# CHANGE 4: Record TTS evidence results (inside the TTS results loop)
+# ============================================================================
+#
+# In the loop that processes TTS results, there are two outcomes:
+#
+# A) Claim fell through (no match, cluster too small):
+#
+#     After the line: if cluster_size < 3: continue
+#     But BEFORE the continue, add:
+#
+#         # --- TTS Audit: record fell-through ---
+#         ft_claim = next((f for f in facts if f.id == fact_id), None)
+#         if ft_claim:
+#             tts_session_audit.add_claim_audit(
+#                 build_failed_claim_audit(
+#                     claim_id=fact_id,
+#                     claim_statement=ft_claim.statement,
+#                     routing_decision=routing_lookup.get(fact_id),
+#                     evidence=evidence,
+#                     reason=f"Cluster too small: {cluster_size} < 3",
+#                 )
+#             )
+#         continue  # (this continue was already there)
+#
+#     Similarly for "if not evidence or not evidence.get('matched'): continue"
+#     add a fell-through audit before the continue.
+#
+#
+# B) Claim resolved by TTS (after tts_check_result and score boost):
+#
+#     After the lines:
+#         tts_results.append(tts_check_result)
+#         tts_resolved_ids.add(fact_id)
+#
+#     Add:
+#         # --- TTS Audit: record resolved claim ---
+#         tts_session_audit.add_claim_audit(
+#             build_claim_audit_from_evidence(
+#                 claim_id=fact_id,
+#                 claim_statement=fact_obj.statement,
+#                 routing_decision=routing_lookup.get(fact_id),
+#                 evidence=evidence,
+#                 llm_match_score=original_llm_score,  # score before boost
+#                 llm_report=original_llm_report,       # report before boost
+#                 adjusted_match_score=tts_check_result.match_score,
+#                 adjusted_report=tts_check_result.report,
+#                 resolved=True,
+#             )
+#         )
+#
+#     NOTE: To capture original_llm_score / original_llm_report, save them
+#     BEFORE calling apply_tts_cluster_boost:
+#
+#         original_llm_score = tts_check_result.match_score
+#         original_llm_report = tts_check_result.report
+#
+#         adjusted_score, adjusted_report = apply_tts_cluster_boost(...)
+#         tts_check_result.match_score = adjusted_score
+#         tts_check_result.report = adjusted_report
+ 
+ 
+# ============================================================================
+# CHANGE 5: Set TTS duration on the session audit
+# ============================================================================
+#
+# After the existing line:
+#     tts_stats["duration"] = round(tts_duration, 2)
+#
+# Add:
+#     tts_session_audit.tts_duration_seconds = tts_duration
+ 
+ 
+# ============================================================================
+# CHANGE 6: Save and upload TTS audit (in Stage 7, alongside search audit)
+# ============================================================================
+#
+# After the existing search audit save/upload block, add:
+#
+#     # Save TTS audit
+#     tts_audit_file_path = None
+#     tts_audit_r2_url = None
+#
+#     if tts_session_audit.total_claims > 0:
+#         tts_audit_file_path = save_tts_audit(
+#             tts_audit=tts_session_audit,
+#             file_manager=self.file_manager,
+#             session_id=session_id,
+#             filename="tts_audit.json",
+#         )
+#
+#         # Upload TTS audit to R2 if available
+#         if self.r2_enabled and self.r2_uploader:
+#             tts_audit_r2_url = await upload_tts_audit_to_r2(
+#                 tts_audit=tts_session_audit,
+#                 session_id=session_id,
+#                 r2_uploader=self.r2_uploader,
+#                 pipeline_type="web-search",  # or "key-claims"
+#             )
+ 
+ 
+# ============================================================================
+# CHANGE 7: Include TTS audit URL in the return dict
+# ============================================================================
+#
+# In the return dict, add alongside the existing "audit" key:
+#
+#     "tts_audit": {
+#         "local_path": tts_audit_file_path,
+#         "r2_url": tts_audit_r2_url,
+#         "summary": tts_session_audit.to_dict()["summary"] if tts_session_audit.total_claims > 0 else None,
+#     },
+ 
+ 
+# ============================================================================
+# CHANGE 8 (error handler): Save partial TTS audit on error
+# ============================================================================
+#
+# In the except block where partial search audit is saved, add:
+#
+#     if tts_session_audit and tts_session_audit.total_claims > 0:
+#         try:
+#             save_tts_audit(
+#                 tts_audit=tts_session_audit,
+#                 file_manager=self.file_manager,
+#                 session_id=session_id,
+#                 filename="tts_audit_partial.json",
+#             )
+#         except:
+#             pass
