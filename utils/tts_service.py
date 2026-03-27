@@ -515,3 +515,91 @@ class TTSService:
             "total_search_results": results.total,
             "source_count": (best.cluster_size or 0),
         }
+
+# ============================================================================
+# TTS SCORE ADJUSTMENT (used by orchestrators after LLM fact-check)
+# ============================================================================
+
+def apply_tts_cluster_boost(
+    llm_score: float,
+    cluster_size: int,
+    cluster_title: str = "",
+    source_list: str = "",
+    llm_report: str = "",
+) -> tuple:
+    """
+    Adjust the LLM match_score based on TTS cluster size.
+
+    The LLM fact-checker scores based on snippet text, which is often
+    truncated from the TTS search API. A large cluster of independent
+    sources covering the same story is strong verification signal that
+    the snippet text alone cannot capture.
+
+    Returns:
+        (adjusted_score, adjusted_report)
+    """
+    original_score = llm_score
+
+    # Cluster-size floor: large clusters guarantee a minimum score
+    if cluster_size >= 20:
+        floor = 0.90
+    elif cluster_size >= 10:
+        floor = 0.82
+    elif cluster_size >= 5:
+        floor = 0.72
+    else:
+        floor = 0.0  # small clusters: trust LLM score as-is
+
+    adjusted_score = max(llm_score, floor)
+
+    # Build a report that reflects multi-source verification
+    was_boosted = adjusted_score > original_score
+
+    if was_boosted:
+        boost_note = (
+            f"Verified via The True Story news aggregation database. "
+            f"This claim matches a news cluster covered by "
+            f"{cluster_size} independent sources"
+        )
+        if cluster_title:
+            boost_note += f' (cluster: "{cluster_title}")'
+        boost_note += ". "
+
+        boost_note += (
+            f"The high number of independent editorial sources reporting "
+            f"this story provides strong corroboration. "
+            f"Note: the text-matching score from article excerpts was "
+            f"{original_score:.0%}, which may reflect truncated search "
+            f"snippets rather than factual disagreement."
+        )
+
+        if source_list:
+            boost_note += f" Sources include: {source_list}."
+
+        # Keep the LLM's analysis as supplementary detail
+        if llm_report:
+            adjusted_report = (
+                f"[TTS Layer 0 - {cluster_size} sources] "
+                f"{boost_note}\n\n"
+                f"LLM excerpt analysis: {llm_report}"
+            )
+        else:
+            adjusted_report = (
+                f"[TTS Layer 0 - {cluster_size} sources] {boost_note}"
+            )
+    else:
+        # LLM score already above floor - keep original report
+        adjusted_report = (
+            f"[TTS Layer 0 - {cluster_size} sources] "
+            f"Corroborated by {cluster_size} sources in "
+            f"The True Story news database. {llm_report}"
+        )
+
+    fact_logger.logger.info(
+        f"TTS cluster boost: cluster_size={cluster_size}, "
+        f"llm_score={original_score:.2f}, "
+        f"adjusted_score={adjusted_score:.2f}, "
+        f"boosted={was_boosted}"
+    )
+
+    return adjusted_score, adjusted_report

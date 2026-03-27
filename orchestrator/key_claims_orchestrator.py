@@ -378,6 +378,12 @@ class KeyClaimsOrchestrator:
 
                             try:
                                 evidence_texts = evidence.get("evidence_texts", [])
+                                story_sources = evidence.get("story_sources", [])
+                                cluster_title = evidence.get("cluster_title", "")
+                                source_list = ", ".join(
+                                    s.get("source", "Unknown")
+                                    for s in (story_sources or evidence_texts)[:5]
+                                )
                                 tts_excerpts = {}
                                 for et in evidence_texts:
                                     src = et.get("source", "TTS")
@@ -411,10 +417,17 @@ class KeyClaimsOrchestrator:
                                         source_metadata=tts_source_metadata,
                                     )
 
-                                    tts_check_result.report = (
-                                        f"[TTS Layer 0 - {cluster_size} sources] "
-                                        f"{tts_check_result.report}"
+                                    # Apply cluster-size boost
+                                    from utils.tts_service import apply_tts_cluster_boost
+                                    adjusted_score, adjusted_report = apply_tts_cluster_boost(
+                                        llm_score=tts_check_result.match_score,
+                                        cluster_size=cluster_size,
+                                        cluster_title=cluster_title,
+                                        source_list=source_list,
+                                        llm_report=tts_check_result.report,
                                     )
+                                    tts_check_result.match_score = adjusted_score
+                                    tts_check_result.report = adjusted_report
 
                                     tts_results.append(tts_check_result)
                                     tts_resolved_ids.add(claim_id)
@@ -424,6 +437,7 @@ class KeyClaimsOrchestrator:
                                         else "partially verified" if tts_check_result.match_score >= 0.7
                                         else "low confidence"
                                     )
+                                    
                                     job_manager.add_progress(
                                         job_id,
                                         f"TTS: {claim_id} {score_label} "
