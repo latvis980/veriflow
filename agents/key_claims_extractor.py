@@ -96,7 +96,7 @@ class QueryInstructions(BaseModel):
 
 class KeyClaimsOutput(BaseModel):
     """Complete output from key claims extraction"""
-    facts: List[dict] = Field(description="List of 2-3 key claims")
+    facts: List[dict] = Field(description="List of up to 5 key claims")
     all_sources: List[str] = Field(description="All source URLs mentioned")
     content_location: Optional[dict] = Field(default=None, description="Country and language info")
     # NEW FIELDS
@@ -122,7 +122,7 @@ class KeyClaimsResult(BaseModel):
 
 class KeyClaimsExtractor:
     """
-    Extract the 2-3 key claims (central thesis) from text
+    Extract up to 5 key claims (central thesis + load-bearing facts) from text
     PLUS content analysis for smarter query generation
     
     Uses GPT-4o for more nuanced analysis.
@@ -146,13 +146,13 @@ class KeyClaimsExtractor:
         fact_logger.log_component_start(
             "KeyClaimsExtractor",
             model="gpt-4o",  # Updated
-            max_claims=3
+            max_claims=5
         )
 
     @traceable(name="key_claims_extraction")
     async def extract(self, parsed_content: dict) -> tuple[List[KeyClaim], List[str], ContentLocation, BroadContext, List[str], QueryInstructions]:
         """
-        Extract 2-3 key claims from parsed content with full analysis
+        Extract up to 5 key claims from parsed content with full analysis
         
         Args:
             parsed_content: Dict with 'text', 'links', 'format' keys
@@ -164,7 +164,7 @@ class KeyClaimsExtractor:
 
         text_length = len(parsed_content.get('text', ''))
         fact_logger.logger.info(
-            f"🎯 Starting key claims extraction (enhanced)",
+            "Starting key claims extraction (enhanced)",
             extra={
                 "text_length": text_length,
                 "num_links": len(parsed_content.get('links', []))
@@ -173,7 +173,7 @@ class KeyClaimsExtractor:
 
         # Check if we need chunking (for very large files)
         if text_length > self.max_input_chars:
-            fact_logger.logger.info(f"📄 Large content detected ({text_length} chars), using chunked extraction")
+            fact_logger.logger.info(f"Large content detected ({text_length} chars), using chunked extraction")
             result = await self._extract_with_chunking(parsed_content)
         else:
             result = await self._extract_single_pass(parsed_content)
@@ -182,7 +182,7 @@ class KeyClaimsExtractor:
 
         duration = time.time() - start_time
         fact_logger.logger.info(
-            f"✅ Key claims extraction complete (enhanced)",
+            "Key claims extraction complete (enhanced)",
             extra={
                 "num_claims": len(claims),
                 "duration_seconds": round(duration, 2),
@@ -202,7 +202,7 @@ class KeyClaimsExtractor:
         # ✅ FIX: Check for minimum content first
         text = parsed_content.get('text', '')
         if not text or len(text.strip()) < 50:
-            fact_logger.logger.warning(f"⚠️ Insufficient text content ({len(text)} chars)")
+            fact_logger.logger.warning(f"Insufficient text content ({len(text)} chars)")
             return self._get_empty_result(
                 parsed_content, 
                 f"Content too short for analysis ({len(text)} characters). Please provide more text."
@@ -223,7 +223,7 @@ class KeyClaimsExtractor:
         callbacks = langsmith_config.get_callbacks("key_claims_extractor")
         chain = prompt_with_format | self.llm | self.parser
 
-        fact_logger.logger.debug("🔗 Invoking LangChain for key claims extraction (GPT-4o)")
+        fact_logger.logger.debug("Invoking LangChain for key claims extraction (GPT-4o)")
 
         try:
             response = await chain.ainvoke(
@@ -238,11 +238,10 @@ class KeyClaimsExtractor:
 
         except Exception as e:
             error_msg = str(e)
-            fact_logger.logger.error(f"❌ LLM invocation failed: {error_msg}")
+            fact_logger.logger.error(f"LLM invocation failed: {error_msg}")
 
-            # ✅ FIX: Return graceful result instead of raising
             if "'NoneType'" in error_msg or "has no attribute" in error_msg:
-                fact_logger.logger.warning("⚠️ LLM returned malformed response, using defaults")
+                fact_logger.logger.warning("LLM returned malformed response, using defaults")
                 return self._get_empty_result(
                     parsed_content,
                     "The content could not be analyzed. It may not contain verifiable factual claims."
@@ -262,7 +261,7 @@ class KeyClaimsExtractor:
         chunks = self._split_into_chunks(text, chunk_size)
 
         fact_logger.logger.info(
-            f"📄 Split content into {len(chunks)} chunks",
+            f"Split content into {len(chunks)} chunks",
             extra={"num_chunks": len(chunks)}
         )
 
@@ -273,7 +272,7 @@ class KeyClaimsExtractor:
         all_query_instructions = []
 
         for i, chunk in enumerate(chunks, 1):
-            fact_logger.logger.debug(f"🔍 Analyzing chunk {i}/{len(chunks)}")
+            fact_logger.logger.debug(f"Analyzing chunk {i}/{len(chunks)}")
 
             chunk_parsed = {
                 'text': chunk,
@@ -337,7 +336,7 @@ class KeyClaimsExtractor:
 
         # ✅ FIX: Handle case where response is None or empty
         if not response:
-            fact_logger.logger.warning("⚠️ Empty or None response from LLM, returning defaults")
+            fact_logger.logger.warning("Empty or None response from LLM, returning defaults")
             return self._get_empty_result(parsed_content, "Insufficient content for analysis")
 
         # ✅ FIX: Check if response indicates no verifiable claims
@@ -352,7 +351,7 @@ class KeyClaimsExtractor:
             if not reasoning:
                 reasoning = "No verifiable factual claims found in this content."
 
-            fact_logger.logger.info(f"ℹ️ No verifiable claims found: {reasoning}")
+            fact_logger.logger.info(f"No verifiable claims found: {reasoning}")
             # Still process what we can, but return empty claims list
 
         # Extract claims
@@ -448,7 +447,7 @@ class KeyClaimsExtractor:
         return "\n".join(formatted)
 
     def _deduplicate_and_rank_claims(self, claims: List[KeyClaim]) -> List[KeyClaim]:
-        """Remove duplicate claims and keep top 2-3 by confidence"""
+        """Remove duplicate claims and keep top 5 by confidence"""
         # Simple deduplication by statement similarity
         seen = set()
         unique = []
@@ -459,9 +458,9 @@ class KeyClaimsExtractor:
                 seen.add(normalized)
                 unique.append(claim)
 
-        # Sort by confidence and keep top 3
+        # Sort by confidence and keep top 5
         unique.sort(key=lambda c: c.confidence, reverse=True)
-        return unique[:3]
+        return unique[:5]
 
     def _aggregate_location_votes(self, votes: List[ContentLocation]) -> ContentLocation:
         """Combine location votes from multiple chunks"""

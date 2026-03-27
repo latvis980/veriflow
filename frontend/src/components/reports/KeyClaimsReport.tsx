@@ -88,7 +88,7 @@ const KeyClaimsReport = ({ data }: Props) => {
       <div className="rounded-xl border border-border bg-card p-5">
         <h3 className="text-xl font-display font-semibold mb-1">Key Claims Analysis</h3>
         <p className="text-sm text-muted-foreground mb-4">
-          We identify the 2-3 most important claims and verify each one thoroughly.
+          We identify up to 5 key claims that define the article's central meaning and verify each one thoroughly.
         </p>
 
         {data.summary && (

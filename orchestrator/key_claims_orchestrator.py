@@ -1,7 +1,7 @@
 # orchestrator/key_claims_orchestrator.py
 """
 Key Claims Orchestrator - WITH PARALLEL PROCESSING
-Extracts and verifies ONLY the 2-3 central thesis claims from text
+Extracts and verifies up to 5 key claims that define the central meaning of the text
 
 OPTIMIZED: Full parallel processing for all stages
    - Parallel query generation
@@ -12,7 +12,7 @@ OPTIMIZED: Full parallel processing for all stages
    - ~60-70% faster than sequential processing
 
 Pipeline:
-1. Extract 2-3 key claims (central thesis statements)
+1. Extract up to 5 key claims (central thesis + load-bearing facts)
 2. Generate search queries for each key claim (PARALLEL)
 3. Execute web searches via Brave (PARALLEL)
 4. Filter results by source credibility (PARALLEL)
@@ -61,7 +61,7 @@ class KeyClaimsOrchestrator:
     """
     Orchestrator for key claims extraction and verification
 
-    Extracts only 2-3 central thesis claims and verifies them thoroughly.
+    Extracts up to 5 key claims that define the central meaning of the text and verifies them thoroughly.
 
     OPTIMIZED: Uses parallel processing for all claim operations
     """

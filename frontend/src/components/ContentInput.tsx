@@ -54,7 +54,7 @@ const modeDescriptions: Record<string, { label: string; hint: string }> = {
   },
   "key-claims": {
     label: "Key claims verification",
-    hint: "Identifies the 2-3 strongest factual claims and verifies each against independent sources. Paste the article or text you want to check.",
+    hint: "Identifies up to 5 key claims that define the article's central meaning and verifies each against independent sources. Paste the article or text you want to check.",
   },
   "bias-analysis": {
     label: "Bias and framing detection",

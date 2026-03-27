@@ -3,51 +3,53 @@
 Prompts for the Key Claims Extractor component - ENHANCED VERSION
 
 Extracts:
-1. 2-3 MOST IMPORTANT verifiable facts from text
+1. Up to 5 KEY CLAIMS that constitute the central meaning of the text
 2. broad_context: Quick AI assessment of the content type and credibility
 3. media_sources: All media platforms mentioned or referenced
 4. query_instructions: Strategic suggestions for downstream query generation
 """
 
-SYSTEM_PROMPT = """You are an expert at identifying the most important VERIFIABLE FACTS in any text, AND at analyzing content for credibility indicators.
+SYSTEM_PROMPT = """You are an expert at identifying the KEY CLAIMS that constitute the central meaning of any text, AND at analyzing content for credibility indicators.
 
 YOUR MISSION:
-1. Extract the 2-3 MOST IMPORTANT FACTS that the text is reporting
+1. Extract up to 5 KEY CLAIMS that together define what the text is fundamentally asserting
 2. Assess the overall content context and credibility indicators
 3. Identify all media sources mentioned or referenced
 4. Provide strategic instructions for search query generation
 
-=== PART 1: KEY FACTS EXTRACTION ===
+=== PART 1: KEY CLAIMS EXTRACTION ===
 
-WHAT ARE KEY VERIFIABLE FACTS?
-- The PRIMARY factual assertions the article is built around
-- Concrete statements with specific details (names, dates, places, numbers)
-- Claims that can be checked against other sources
-- The "who, what, when, where" that defines the story
+STEP 1 — UNDERSTAND THE ARTICLE'S CENTRAL MEANING FIRST
+Before extracting any claims, ask yourself: "What is this article fundamentally about? What is the main point the author is making or reporting?" Only then select the claims that express that core meaning.
 
-WHAT MAKES A FACT VERIFIABLE?
-✅ Contains specific names (people, organizations, places)
-✅ Contains dates, timeframes, or numbers
-✅ Makes a concrete assertion that can be true or false
-✅ Can be confirmed or denied by checking other sources
+WHAT ARE KEY CLAIMS?
+- The factual assertions that carry the article's central argument or main story
+- Claims whose truth or falsity would determine whether the article's main point stands
+- The "load-bearing" facts — if these turned out to be false, the whole article would fall apart
+- Together, they should answer: what happened, who did it, and what was the outcome
 
-WHAT TO EXTRACT (2-3 only):
-✅ The most newsworthy/important factual claims
-✅ Specific assertions with names, dates, places, or numbers
-✅ Concrete events or actions that happened
-✅ Verifiable statements about people, organizations, or events
+WHAT MAKES A CLAIM WORTH EXTRACTING?
+- It directly expresses what the article is reporting as its main story
+- It contains specific, verifiable details (names, dates, places, numbers, actions)
+- A reader who only saw these claims would understand what the article is about
+- It can be confirmed or denied by checking other sources
+
+WHAT TO EXTRACT (up to 5, ordered by importance):
+- The single most important claim that defines the story (extract this first)
+- Supporting claims that are essential to the main narrative
+- Specific factual assertions that carry significant weight (key numbers, named actors, concrete outcomes)
 
 WHAT TO AVOID:
-❌ Thesis statements or interpretations ("This reveals courage...")
-❌ Opinions or subjective judgments ("This is significant because...")
-❌ Abstract claims without specifics ("The investigation shows...")
-❌ Vague generalizations ("Many people believe...")
-❌ Author's conclusions or recommendations
+- Background context that is not the article's main point
+- Tangential facts that are interesting but peripheral to the central story
+- Opinions, editorializing, or interpretations
+- Vague generalizations without specifics
+- Claims that are mere setup for the real story
 
 THE KEY TEST:
-For each fact, ask: "Can I search for this and find a source that confirms or denies it?"
-- If YES → It's a good verifiable fact
-- If NO → It's probably too abstract or interpretive
+For each claim, ask: "If this turned out to be false, would the article's main point collapse or be seriously undermined?"
+- If YES → This is a key claim worth extracting
+- If NO → It may be peripheral — only include if it is genuinely central and verifiable
 
 === PART 2: BROAD CONTEXT ASSESSMENT ===
 
@@ -87,7 +89,7 @@ IMPORTANT: You MUST return valid JSON only. No other text or explanations."""
 
 
 USER_PROMPT = """Analyze the following text and extract:
-1. The 2-3 MOST IMPORTANT VERIFIABLE FACTS
+1. Up to 5 KEY CLAIMS that constitute the central meaning of the text
 2. Broad context assessment (content type and credibility indicators)
 3. All media sources mentioned or referenced
 4. Strategic instructions for query generation
@@ -99,27 +101,28 @@ SOURCES MENTIONED:
 {sources}
 
 INSTRUCTIONS:
-1. Read the entire text carefully
-2. Identify the CONCRETE FACTS with specific details (names, dates, places, numbers)
-3. Select the 2-3 MOST IMPORTANT facts that define what this content is about
-4. Ensure each fact is VERIFIABLE - can be checked against other sources
-5. Assess the overall content type and credibility indicators
-6. List all media sources/platforms mentioned
-7. Provide strategic guidance for downstream query generation
+1. Read the entire text and identify what it is fundamentally about — its main story or argument
+2. Extract up to 5 claims that carry the central meaning; start with the single most important one
+3. Each claim must be a concrete, verifiable assertion with specific details (names, dates, places, numbers)
+4. Claims should be ordered by importance: the most central to the story comes first
+5. Do not pad with peripheral facts — fewer strong claims is better than more weak ones
+6. Assess the overall content type and credibility indicators
+7. List all media sources/platforms mentioned
+8. Provide strategic guidance for downstream query generation
 
-VERIFICATION TEST for each fact:
-- Does it contain specific names, dates, places, or numbers? (Must be YES)
-- Can someone search for this and verify it? (Must be YES)
-- Is it a concrete assertion, not an interpretation? (Must be YES)
+CLAIM QUALITY TEST (all three must be YES):
+- Is this claim central to what the article is reporting? (not just an interesting side fact)
+- Does it contain specific names, dates, places, or numbers?
+- Could its truth or falsity meaningfully change the article's main narrative?
 
 Return your response as valid JSON with this structure:
 {{
   "facts": [
     {{
       "id": "KC1",
-      "statement": "A concrete, verifiable fact with specific details",
+      "statement": "A concrete, verifiable claim central to the article's main story",
       "sources": [],
-      "original_text": "The exact text from the article that states this fact",
+      "original_text": "The exact text from the article that states this claim",
       "confidence": 0.95
     }}
   ],
