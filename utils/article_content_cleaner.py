@@ -22,19 +22,21 @@ Preserves:
 - Main article body paragraphs
 - Relevant quotes
 - Image captions (optionally)
+
+STRICT: Never invents, paraphrases, or adds content not present in raw input.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from pydantic import BaseModel, Field
 import json
-
 import os
 import re
 
 from langchain.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from utils.logger import fact_logger
+from prompts.article_content_cleaner_prompts import SYSTEM_PROMPT, USER_PROMPT
 
 
 # ============================================================================
@@ -112,119 +114,6 @@ class CleaningResult(BaseModel):
 
 
 # ============================================================================
-# PROMPTS
-# ============================================================================
-
-SYSTEM_PROMPT = """You are an expert at extracting clean article content from noisy web page scrapes.
-
-## YOUR TASK
-Given raw scraped content from a news article, extract ONLY the actual journalism:
-- The headline/title
-- The byline (author name, date)
-- The article body paragraphs
-- Relevant quotes and attributions
-
-## NOISE TO REMOVE (ignore completely)
-
-### Subscription/Access Noise
-- "Subscribe to read more", "Sign in to continue"
-- "This article is for subscribers only"
-- Paywall messages, premium content notices
-- "X articles remaining this month"
-- Account/login prompts
-
-### Device/Session Noise
-- "You can only read on one device at a time"
-- "Reading in progress on another device"
-- "Continue reading here"
-- Session warnings, device limits
-- "Click to continue on this device"
-
-### Navigation Noise
-- Menu items, breadcrumbs
-- "Back to top", "Skip to content"
-- Section headers like "Politics", "Business" (unless part of article)
-- "Related articles", "More from this author"
-- "Read also", "See also" sections
-
-### Promotional Noise
-- Newsletter signup prompts
-- "Download our app"
-- "Follow us on social media"
-- Donation/support requests
-- Event promotions
-
-### Interactive Noise
-- Comment sections and counts
-- Share buttons text
-- Like/reaction counts
-- "X people are reading this"
-- Poll widgets
-
-### Legal/Technical Noise
-- Cookie notices
-- Privacy policy links
-- Terms of service
-- Copyright notices at bottom
-- "Contact us", "About us"
-- Advertising labels
-
-### Repeated/Duplicated Content
-- Content that appears multiple times (often from page templates)
-- FAQ sections about subscriptions
-- Generic "how to read" instructions
-
-## EXTRACTION RULES
-
-1. **Title**: Extract the main headline - usually the most prominent text at the start
-2. **Subtitle**: If there's a deck/subtitle under the headline, include it
-3. **Author**: Look for "By [Name]" pattern near the top
-4. **Date**: Look for publication date near byline
-5. **Body**: Extract all substantive paragraphs that form the article narrative
-
-## CONTENT QUALITY CHECKS
-
-- If the body is very short (<200 words) but there are paywall messages, mark `is_truncated: true`
-- If content seems incomplete mid-sentence, mark `is_truncated: true`
-- Note what types of noise you removed in `noise_removed`
-
-## OUTPUT FORMAT
-
-Return valid JSON with the CleanedArticle structure. The `body` field should contain 
-the clean article text with paragraphs separated by double newlines.
-
-Be aggressive about removing noise - if in doubt, leave it out. The goal is clean, 
-readable journalism without any web page cruft."""
-
-
-USER_PROMPT = """Clean this scraped article content. Extract only the actual journalism.
-
-URL: {url}
-Domain: {domain}
-
-RAW SCRAPED CONTENT:
----
-{content}
----
-
-Extract the clean article and return JSON with:
-- title: Main headline
-- subtitle: Subtitle/deck if present (null if none)
-- author: Author name(s) (null if not found)
-- publication_date: Date string as found (null if not found)
-- body: Clean article text (paragraphs separated by \\n\\n)
-- lead_paragraph: Opening paragraph if distinct (null if not)
-- image_captions: List of relevant captions (empty list if none)
-- word_count: Word count of body
-- cleaning_confidence: 0.0-1.0 confidence score
-- noise_removed: List of noise types removed (e.g., ["subscription_prompt", "device_warning", "navigation"])
-- is_truncated: true if article appears cut off by paywall
-- truncation_reason: Why truncated (null if not truncated)
-
-Return ONLY valid JSON."""
-
-
-# ============================================================================
 # ARTICLE CONTENT CLEANER
 # ============================================================================
 
@@ -232,14 +121,14 @@ class ArticleContentCleaner:
     """
     AI-powered article content cleaner.
 
-    Uses GPT-4o-mini to intelligently extract only the actual article content
-    from noisy web page scrapes, removing all promotional, navigation, and
-    subscription-related noise.
+    Uses gpt-4.1-nano to extract only the actual article content from noisy
+    web page scrapes, removing all promotional, navigation, and
+    subscription-related noise. Never invents or paraphrases content.
     """
 
     # Processing limits
-    MAX_INPUT_LENGTH = 100000  # Max chars to send to AI (~1M token context)
-    MIN_CONTENT_LENGTH = 100  # Min chars to attempt cleaning
+    MAX_INPUT_LENGTH = 100000  # Max chars to send to AI
+    MIN_CONTENT_LENGTH = 100   # Min chars to attempt cleaning
 
     def __init__(self, config=None):
         """
@@ -250,18 +139,16 @@ class ArticleContentCleaner:
         """
         self.config = config
 
-        # Initialize LLM - Gemini 2.0 Flash: 1M context, fast, cheap
-        # NOTE: Using synchronous client due to async issues in langchain-google-genai
-        # See: https://github.com/langchain-ai/langchain-google/issues/357
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
+        # gpt-4.1-nano: fast, cheap, reliable async support
+        self.llm = ChatOpenAI(
+            model="gpt-4.1-nano",
             temperature=0,
-            max_output_tokens=4096,
-            google_api_key=os.environ.get("GOOGLE_API_KEY"),
-            # NOTE: timeout parameter doesn't work reliably, using asyncio.wait_for wrapper instead
+            max_tokens=4096,
+            openai_api_key=os.environ.get("OPENAI_API_KEY"),
+            timeout=60,
         )
 
-        # Build prompt template
+        # Build prompt template from imported prompts
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PROMPT),
             ("user", USER_PROMPT)
@@ -270,7 +157,7 @@ class ArticleContentCleaner:
         # In-memory cache
         self.cache: Dict[str, CleanedArticle] = {}
 
-        fact_logger.logger.info("ArticleContentCleaner initialized (gemini-2.0-flash)")
+        fact_logger.logger.info("ArticleContentCleaner initialized (gpt-4.1-nano)")
 
     async def clean(
         self,
@@ -328,30 +215,21 @@ class ArticleContentCleaner:
                 extra={"url": url, "input_length": len(content)}
             )
 
-            # Run AI cleaning with timeout wrapper
-            # Using synchronous invoke() due to ainvoke() issues with ChatGoogleGenerativeAI
-            # Wrap in asyncio.to_thread() to make it non-blocking
-            # See: https://github.com/langchain-ai/langchain-google/issues/357
             chain = self.prompt | self.llm
 
+            # OpenAI supports ainvoke natively - no thread workaround needed
             import asyncio
-
-            # Create a function that runs the sync invoke
-            def run_sync_invoke():
-                return chain.invoke({
-                    "url": url,
-                    "domain": domain,
-                    "content": content_to_clean
-                })
-
-            # Run with timeout (60 seconds)
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(run_sync_invoke),
+                    chain.ainvoke({
+                        "url": url,
+                        "domain": domain,
+                        "content": content_to_clean
+                    }),
                     timeout=60.0
                 )
             except asyncio.TimeoutError:
-                fact_logger.logger.error(f"[LOG] Gemini cleaning timed out after 60s for {domain}")
+                fact_logger.logger.error(f"[LOG] Cleaning timed out after 60s for {domain}")
                 return CleaningResult(
                     success=False,
                     error="AI cleaning timed out",
@@ -438,7 +316,7 @@ class ArticleContentCleaner:
         use_cache: bool = True
     ) -> Dict[str, CleaningResult]:
         """
-        Clean multiple articles.
+        Clean multiple articles in parallel.
 
         Args:
             articles: Dict mapping URL to raw content
@@ -451,8 +329,8 @@ class ArticleContentCleaner:
 
         results = {}
 
-        # Process in parallel with semaphore to limit concurrency
-        semaphore = asyncio.Semaphore(5)  # Max 5 concurrent AI calls
+        # Limit concurrency to avoid rate limits
+        semaphore = asyncio.Semaphore(5)
 
         async def clean_with_semaphore(url: str, content: str):
             async with semaphore:
@@ -489,17 +367,16 @@ def get_article_cleaner(config=None) -> ArticleContentCleaner:
 if __name__ == "__main__":
     import asyncio
 
-    # Sample noisy content (like the Le Monde example)
     test_content = """
     Cet article vous est offert Pour lire gratuitement cet article reserve aux abonnes, connectez-vous Se connecter Vous n'etes pas inscrit sur Le Monde ? Inscrivez-vous gratuitement
 
-    # Plainte contre Thierry Mariani pour -> provocation -> la discrimination au logement ->
+    # Plainte contre Thierry Mariani pour provocation a la discrimination au logement
 
     Thierry Mariani, depute europeen du Rassemblement national (RN) et candidat a la Mairie de Paris, devant le marche couvert des Batignolles, dans le 17 arrondissement de Paris, le 11 janvier 2026. KIRAN RIDLEY/AFP
 
-    Thierry Mariani, candidat Rassemblement national (RN) a la Mairie de Paris et depute europeen, est vise par une plainte de l'association La Maison des potes pour " provocation a la discrimination au logement ", en raison de sa promesse de campagne d'instaurer la priorite nationale, a declare vendredi la plaignante a l'Agence France-Presse (AFP).
+    Thierry Mariani, candidat Rassemblement national (RN) a la Mairie de Paris et depute europeen, est vise par une plainte de l'association La Maison des potes pour "provocation a la discrimination au logement", en raison de sa promesse de campagne d'instaurer la priorite nationale, a declare vendredi la plaignante a l'Agence France-Presse (AFP).
 
-    L'association estime qu'avec cet argument Thierry Mariani " appelle explicitement tous ceux qui seront candidats sur sa liste " a " l'instauration d'une politique municipale fondee sur un critere de nationalite, lequel est prohibe par la loi ".
+    L'association estime qu'avec cet argument Thierry Mariani "appelle explicitement tous ceux qui seront candidats sur sa liste" a "l'instauration d'une politique municipale fondee sur un critere de nationalite, lequel est prohibe par la loi".
 
     Cette plainte, transmise au parquet de Paris recemment, mentionne le site Internet de la candidature de M. Mariani.
 
