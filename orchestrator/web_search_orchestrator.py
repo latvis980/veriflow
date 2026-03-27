@@ -405,7 +405,7 @@ class WebSearchOrchestrator:
                                     original_llm_report = tts_check_result.report
 
                                     # Apply cluster-size boost
-                                    from utils.tts_service import apply_tts_cluster_boost
+                                    from utils.tts_service import apply_tts_cluster_boost, build_tts_story_url
                                     adjusted_score, adjusted_report = apply_tts_cluster_boost(
                                         llm_score=tts_check_result.match_score,
                                         cluster_size=cluster_size,
@@ -415,6 +415,18 @@ class WebSearchOrchestrator:
                                     )
                                     tts_check_result.match_score = adjusted_score
                                     tts_check_result.report = adjusted_report
+
+                                    # Structured TTS metadata for frontend
+                                    tts_cluster_id = evidence.get("cluster_id", "")
+                                    tts_edition = evidence.get("edition", "en")
+                                    if tts_cluster_id:
+                                        tts_check_result.tts_story_url = build_tts_story_url(
+                                            cluster_id=tts_cluster_id,
+                                            edition=tts_edition,
+                                        )
+                                    tts_check_result.tts_source_count = cluster_size
+                                    tts_check_result.tts_cluster_title = cluster_title
+                                    tts_check_result.tts_source_list = source_list
 
                                     tts_results.append(tts_check_result)
                                     tts_resolved_ids.add(fact_id)
@@ -500,7 +512,11 @@ class WebSearchOrchestrator:
                             "match_score": r.match_score,
                             "confidence": r.confidence,
                             "report": r.report,
-                            "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None
+                            "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None,
+                            "tts_story_url": getattr(r, 'tts_story_url', None),
+                            "tts_source_count": getattr(r, 'tts_source_count', None),
+                            "tts_cluster_title": getattr(r, 'tts_cluster_title', None),
+                            "tts_source_list": getattr(r, 'tts_source_list', None),
                         }
                         for r in tts_results
                     ],
@@ -782,7 +798,7 @@ class WebSearchOrchestrator:
                     )
 
                     # Progress update
-                    score_emoji = "" if result.match_score >= 0.9 else "" if result.match_score >= 0.7 else ""
+                    score_label = "OK" if result.match_score >= 0.9 else "PARTIAL" if result.match_score >= 0.7 else "LOW"
                     job_manager.add_progress(
                         job_id,
                         f"{score_emoji} {fact.id}: {result.match_score:.0%} - {result.report[:50]}..."
@@ -881,7 +897,7 @@ class WebSearchOrchestrator:
 
             # Log performance metrics
             fact_logger.logger.info(
-                " Web Search Pipeline Performance",
+                "Web Search Pipeline Performance",
                 extra={
                     "total_time": round(processing_time, 2),
                     "query_gen_time": round(query_gen_duration, 2),
@@ -904,7 +920,11 @@ class WebSearchOrchestrator:
                         "match_score": r.match_score,
                         "confidence": r.confidence,
                         "report": r.report,
-                        "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None
+                        "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None,
+                        "tts_story_url": getattr(r, 'tts_story_url', None),
+                        "tts_source_count": getattr(r, 'tts_source_count', None),
+                        "tts_cluster_title": getattr(r, 'tts_cluster_title', None),
+                        "tts_source_list": getattr(r, 'tts_source_list', None),
                     }
                     for r in final_results
                 ],

@@ -30,6 +30,11 @@ class FactCheckResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     report: str = Field(description="Comprehensive verification report")
     tier_breakdown: Optional[Dict[str, int]] = None
+    # TTS verification metadata (set when claim resolved via TTS)
+    tts_story_url: Optional[str] = None
+    tts_source_count: Optional[int] = None
+    tts_cluster_title: Optional[str] = None
+    tts_source_list: Optional[str] = None
 
 
 class FactChecker:

@@ -485,7 +485,7 @@ class KeyClaimsOrchestrator:
                                     original_llm_report = tts_check_result.report
 
                                     # Apply cluster-size boost
-                                    from utils.tts_service import apply_tts_cluster_boost
+                                    from utils.tts_service import apply_tts_cluster_boost, build_tts_story_url
                                     adjusted_score, adjusted_report = apply_tts_cluster_boost(
                                         llm_score=tts_check_result.match_score,
                                         cluster_size=cluster_size,
@@ -495,6 +495,18 @@ class KeyClaimsOrchestrator:
                                     )
                                     tts_check_result.match_score = adjusted_score
                                     tts_check_result.report = adjusted_report
+
+                                    # Structured TTS metadata for frontend
+                                    tts_cluster_id = evidence.get("cluster_id", "")
+                                    tts_edition = evidence.get("edition", "en")
+                                    if tts_cluster_id:
+                                        tts_check_result.tts_story_url = build_tts_story_url(
+                                            cluster_id=tts_cluster_id,
+                                            edition=tts_edition,
+                                        )
+                                    tts_check_result.tts_source_count = cluster_size
+                                    tts_check_result.tts_cluster_title = cluster_title
+                                    tts_check_result.tts_source_list = source_list
 
                                     tts_results.append(tts_check_result)
                                     tts_resolved_ids.add(claim_id)
@@ -1005,7 +1017,11 @@ class KeyClaimsOrchestrator:
                         "match_score": r.match_score,
                         "confidence": r.confidence,
                         "report": r.report,
-                        "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None
+                        "tier_breakdown": r.tier_breakdown if hasattr(r, 'tier_breakdown') else None,
+                        "tts_story_url": getattr(r, 'tts_story_url', None),
+                        "tts_source_count": getattr(r, 'tts_source_count', None),
+                        "tts_cluster_title": getattr(r, 'tts_cluster_title', None),
+                        "tts_source_list": getattr(r, 'tts_source_list', None),
                     }
                     for r in final_results
                 ],

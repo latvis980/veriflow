@@ -517,6 +517,26 @@ class TTSService:
         }
 
 # ============================================================================
+# TTS URL BUILDER
+# ============================================================================
+
+def build_tts_story_url(
+    cluster_id: str,
+    edition: str = "en",
+    category: Optional[str] = None,
+) -> str:
+    """
+    Construct a public URL to a story on The True Story website.
+    URL pattern: https://thetruestory.news/{edition}/{category}/story/{cluster_id}
+    """
+    default_categories = {
+        "en": "world",
+        "ru": "russia",
+    }
+    cat = category or default_categories.get(edition, "world")
+    return f"https://thetruestory.news/{edition}/{cat}/story/{cluster_id}"
+
+# ============================================================================
 # TTS SCORE ADJUSTMENT (used by orchestrators after LLM fact-check)
 # ============================================================================
 
@@ -552,54 +572,19 @@ def apply_tts_cluster_boost(
 
     adjusted_score = max(llm_score, floor)
 
-    # Build a report that reflects multi-source verification
-    was_boosted = adjusted_score > original_score
-
-    if was_boosted:
-        boost_note = (
-            f"Verified via The True Story news aggregation database. "
-            f"This claim matches a news cluster covered by "
-            f"{cluster_size} independent sources"
-        )
-        if cluster_title:
-            boost_note += f' (cluster: "{cluster_title}")'
-        boost_note += ". "
-
-        boost_note += (
-            f"The high number of independent editorial sources reporting "
-            f"this story provides strong corroboration. "
-            f"Note: the text-matching score from article excerpts was "
-            f"{original_score:.0%}, which may reflect truncated search "
-            f"snippets rather than factual disagreement."
-        )
-
-        if source_list:
-            boost_note += f" Sources include: {source_list}."
-
-        # Keep the LLM's analysis as supplementary detail
-        if llm_report:
-            adjusted_report = (
-                f"[TTS Layer 0 - {cluster_size} sources] "
-                f"{boost_note}\n\n"
-                f"LLM excerpt analysis: {llm_report}"
-            )
-        else:
-            adjusted_report = (
-                f"[TTS Layer 0 - {cluster_size} sources] {boost_note}"
-            )
-    else:
-        # LLM score already above floor - keep original report
-        adjusted_report = (
-            f"[TTS Layer 0 - {cluster_size} sources] "
-            f"Corroborated by {cluster_size} sources in "
-            f"The True Story news database. {llm_report}"
-        )
+    # Concise report -- frontend handles structured display via tts_ fields
+    report = f"Corroborated by {cluster_size} independent news sources"
+    if cluster_title:
+        report += f' covering "{cluster_title}"'
+    report += "."
+    if source_list:
+        report += f" Sources include: {source_list}."
 
     fact_logger.logger.info(
         f"TTS cluster boost: cluster_size={cluster_size}, "
         f"llm_score={original_score:.2f}, "
         f"adjusted_score={adjusted_score:.2f}, "
-        f"boosted={was_boosted}"
+        f"boosted={adjusted_score > original_score}"
     )
 
-    return adjusted_score, adjusted_report
+    return adjusted_score, report

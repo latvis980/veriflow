@@ -1,11 +1,12 @@
 // src/components/reports/KeyClaimsReport.tsx
 import { cn } from "@/lib/utils";
 import { ScoreBadge, SessionInfo, getScoreColor } from "./shared";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { useState } from "react";
 
 // Backend returns: id, statement, match_score (0-1), confidence (0-1), report, tier_breakdown
 // Key claims mode also sends: claim_text as alias, assessment as alias
+// TTS-verified claims also include: tts_story_url, tts_source_count, tts_cluster_title, tts_source_list
 type Claim = {
   id: string;
   statement?: string;
@@ -15,6 +16,11 @@ type Claim = {
   report?: string;
   assessment?: string;      // legacy alias for report
   tier_breakdown?: { tier1?: number; tier2?: number; tier3?: number; filtered?: number } | null;
+  // TTS verification metadata
+  tts_story_url?: string | null;
+  tts_source_count?: number | null;
+  tts_cluster_title?: string | null;
+  tts_source_list?: string | null;
 };
 
 type Props = {
@@ -124,6 +130,7 @@ const KeyClaimsReport = ({ data }: Props) => {
             const scorePercent = Math.round(matchScore * 100);
             const status = deriveStatus(matchScore);
             const isOpen = expanded[claim.id];
+            const isTtsVerified = !!claim.tts_story_url;
 
             // Handle field name variants
             const statementText = claim.statement || claim.claim_text || "No statement available";
@@ -143,8 +150,28 @@ const KeyClaimsReport = ({ data }: Props) => {
                       </span>
                     </div>
                     <p className="text-base font-medium mb-2">{statementText}</p>
-                    {reportText && (
-                      <p className="text-sm text-muted-foreground leading-relaxed">{reportText}</p>
+
+                    {isTtsVerified ? (
+                      /* TTS-verified claim: compact layout with link */
+                      <div className="text-sm text-muted-foreground leading-relaxed space-y-1.5">
+                        <p>{reportText}</p>
+                        <a
+                          href={claim.tts_story_url!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
+                        >
+                          View story on The True Story
+                          <ExternalLink size={11} />
+                        </a>
+                      </div>
+                    ) : (
+                      /* Standard claim: original layout */
+                      <>
+                        {reportText && (
+                          <p className="text-sm text-muted-foreground leading-relaxed">{reportText}</p>
+                        )}
+                      </>
                     )}
 
                     {claim.tier_breakdown && (
