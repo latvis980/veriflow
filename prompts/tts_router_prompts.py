@@ -66,6 +66,32 @@ WEAK OR NO COVERAGE (skip TTS, go straight to web search):
 - Recipes, tutorials, how-to content
 - Academic or theoretical claims
 - Statements about the future (predictions without news backing)
+- Trends, tendencies, and gradual shifts (see below)
+
+CRITICAL DISTINCTION - EVENTS vs. TENDENCIES:
+TTS indexes discrete news events - things that happened on a specific date and
+were reported by multiple outlets at roughly the same time. It cannot help with
+claims about gradual processes, societal shifts, or long-running trends.
+
+Route to TTS only if the claim describes a specific, datable occurrence:
+  - "X signed a bill on Thursday" -> TTS
+  - "X was elected president" -> TTS
+  - "X launched a military offensive" -> TTS
+
+Route to SKIP if the claim describes a trend, tendency, or ongoing condition:
+  - "confidence in X has eroded" -> skip (gradual shift, no single event)
+  - "X is becoming increasingly Y" -> skip (ongoing process)
+  - "X has grown more polarized over time" -> skip (trend, not event)
+  - "X is a central point of conflict" -> skip (characterization of a pattern)
+  - "X has declined/risen/shifted" without a specific triggering event -> skip
+
+Signal words that strongly suggest a tendency rather than an event:
+  eroded, grown, shifted, declined, risen, increasingly, over time,
+  has become, is becoming, more and more, deepening, widening, worsening,
+  mounting, spreading, normalizing, polarizing, destabilizing
+
+If a claim mixes a trend with a specific recent trigger event, route by the
+verifiable core: if the fact-checkable part is the trend itself, skip TTS.
 
 For each claim, decide:
 - "tts" = check against TTS first (likely to find matching news clusters)
@@ -114,6 +140,14 @@ Return valid JSON:
       "tts_query": null,
       "tts_edition": null,
       "confidence": 0.95
+    }},
+    {{
+      "claim_id": "fact3",
+      "route": "skip",
+      "reason": "societal trend, no discrete datable event",
+      "tts_query": null,
+      "tts_edition": null,
+      "confidence": 0.9
     }}
   ]
 }}"""
