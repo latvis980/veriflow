@@ -12,6 +12,15 @@ Stores a comprehensive audit trail of TTS Layer 0 verification:
 
 PURPOSE: Human auditors can review every TTS snippet against
 the original claim to validate VeriFlow's verification report.
+
+The JSON output begins with a "quick_review" section containing
+a flat, scannable summary per claim:
+  - claim text
+  - routing decision and reason
+  - cluster headline matched
+  - headlines and snippets sent to the LLM
+  - LLM verdict and score
+Full detail follows in "claim_audits".
 """
 
 from dataclasses import dataclass, field, asdict
@@ -50,9 +59,9 @@ class TTSEvidenceSnippet:
     that VeriFlow used to verify a claim.
     """
     source_name: str  # e.g. "Reuters", "BBC News"
-    text: str  # The article snippet / excerpt
+    text: str         # The article snippet / excerpt
     url: str = ""
-    title: str = ""  # Article title if available
+    title: str = ""   # Article headline if available
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,17 +122,66 @@ class TTSClaimAudit:
     story_sources: List[TTSStorySource] = field(default_factory=list)
 
     # LLM verification using TTS evidence
-    llm_match_score: float = 0.0  # Score from LLM fact checker
-    llm_report: str = ""  # LLM's assessment text
+    llm_match_score: float = 0.0   # Score from LLM fact checker
+    llm_report: str = ""           # LLM's assessment text
 
     # Cluster boost adjustment
     adjusted_match_score: float = 0.0  # After apply_tts_cluster_boost
-    adjusted_report: str = ""  # After boost
+    adjusted_report: str = ""          # After boost
     was_boosted: bool = False
 
     # Outcome
-    resolved_by_tts: bool = False  # Did TTS resolve this claim?
-    fell_through_reason: str = ""  # Why it fell through (if it did)
+    resolved_by_tts: bool = False   # Did TTS resolve this claim?
+    fell_through_reason: str = ""   # Why it fell through (if it did)
+
+    def to_quick_review(self) -> Dict[str, Any]:
+        """
+        Compact view of a single claim for the quick_review section.
+
+        Shows exactly what the auditor cares about most:
+        - the claim
+        - what the TTS router decided
+        - which cluster headline matched
+        - the headlines and snippet texts sent to the LLM
+        - the LLM score and verdict
+        """
+        routing_summary = None
+        if self.routing:
+            routing_summary = {
+                "decision": self.routing.route,
+                "reason": self.routing.reason,
+                "query_sent_to_tts": self.routing.tts_query,
+                "edition": self.routing.tts_edition,
+                "confidence": self.routing.confidence,
+            }
+
+        snippets_sent_to_llm = [
+            {
+                "source": s.source_name,
+                "headline": s.title,
+                "text": s.text,
+                "url": s.url,
+            }
+            for s in self.evidence_snippets
+        ]
+
+        return {
+            "claim_id": self.claim_id,
+            "claim": self.claim_statement,
+            "routing": routing_summary,
+            "cluster_matched": self.cluster_matched,
+            "cluster_headline": self.cluster_title if self.cluster_matched else None,
+            "cluster_size": self.cluster_size if self.cluster_matched else None,
+            "snippets_sent_to_llm": snippets_sent_to_llm,
+            "llm_verdict": {
+                "score_before_boost": self.llm_match_score,
+                "score_after_boost": self.adjusted_match_score,
+                "was_boosted": self.was_boosted,
+                "report": self.llm_report,
+            },
+            "resolved_by_tts": self.resolved_by_tts,
+            "fell_through_reason": self.fell_through_reason if not self.resolved_by_tts else None,
+        }
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -160,7 +218,13 @@ class TTSSessionAudit:
     """
     Complete TTS audit for an entire fact-checking session.
 
-    Uploaded to R2 as a JSON file for human review.
+    Uploaded to R2 under tts-audits/{pipeline_type}/{session_id}/tts_audit.json
+
+    JSON structure (top to bottom):
+      session_id, created_at, pipeline_type, content_location -- metadata
+      summary                                                  -- session totals
+      quick_review                                             -- scannable per-claim digest
+      claim_audits                                             -- full detail per claim
     """
     session_id: str
     created_at: str = field(
@@ -202,6 +266,10 @@ class TTSSessionAudit:
                 self.skipped += 1
 
     def to_dict(self) -> Dict[str, Any]:
+        # quick_review: flat per-claim digest placed before the full detail
+        # so an auditor opening the file sees the key info immediately
+        quick_review = [c.to_quick_review() for c in self.claim_audits]
+
         return {
             "session_id": self.session_id,
             "created_at": self.created_at,
@@ -219,6 +287,9 @@ class TTSSessionAudit:
                 "skipped": self.skipped,
                 "tts_duration_seconds": self.tts_duration_seconds,
             },
+            # Scannable digest -- what the auditor reads first
+            "quick_review": quick_review,
+            # Full detail per claim
             "claim_audits": [c.to_dict() for c in self.claim_audits],
         }
 

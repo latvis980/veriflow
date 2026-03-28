@@ -50,6 +50,27 @@ const modeLabels: Record<string, string> = {
   llm_output_verification: "LLM Output Verification",
 };
 
+// Splits the LLM summary into paragraphs and bolds leading ALL-CAPS section labels
+const formatSummary = (text: string) => {
+  const paragraphs = text.split(/\n+/).filter(p => p.trim().length > 0);
+  return paragraphs.map((para, i) => {
+    // Match leading ALL-CAPS label followed by " —" or " -"
+    const match = para.match(/^([A-Z][A-Z\s\/]+?)(\s+[—\-])/);
+    if (match) {
+      const label = match[1] + match[2];
+      const rest = para.slice(label.length);
+      return (
+        <p key={i} className="text-base leading-relaxed mb-3 last:mb-0">
+          <strong>{label}</strong>{rest}
+        </p>
+      );
+    }
+    return (
+      <p key={i} className="text-base leading-relaxed mb-3 last:mb-0">{para}</p>
+    );
+  });
+};
+
 const ComprehensiveReport = ({ data }: Props) => {
   // Auto-expand all mode sections by default
   const modeKeys = useMemo(
@@ -166,39 +187,7 @@ const ComprehensiveReport = ({ data }: Props) => {
         )}
       </div>
 
-      {/* Mode Reports -- auto-expanded */}
-      {data.mode_reports && Object.entries(data.mode_reports).map(([key, value]) => (
-        <div key={key} className="rounded-xl border border-border bg-card overflow-hidden">
-          <button
-            onClick={() => toggleMode(key)}
-            className="w-full flex items-center justify-between p-4 text-base font-medium hover:bg-secondary/50 transition-colors"
-          >
-            <span>{modeLabels[key] || key.replace(/_/g, " ")}</span>
-            {expandedModes[key] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-          {expandedModes[key] && (
-            <div className="px-4 pb-4">
-              {renderSubReport(key, value)}
-            </div>
-          )}
-        </div>
-      ))}
-
-      {/* Mode Errors */}
-      {data.mode_errors && Object.keys(data.mode_errors).length > 0 && (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
-          <h4 className="text-sm font-semibold uppercase tracking-wide text-destructive mb-2">
-            Failed Modes
-          </h4>
-          {Object.entries(data.mode_errors).map(([key, err]) => (
-            <p key={key} className="text-sm text-muted-foreground">
-              {modeLabels[key] || key}: {err}
-            </p>
-          ))}
-        </div>
-      )}
-
-      {/* Synthesis / Overall Assessment */}
+      {/* Synthesis / Overall Assessment -- shown at top */}
       {synth && (
         <div className="rounded-xl border border-border bg-card p-5">
           <div className="flex items-center justify-between mb-3">
@@ -220,7 +209,9 @@ const ComprehensiveReport = ({ data }: Props) => {
             )}
           </div>
 
-          {synth.summary && <p className="text-base leading-relaxed mb-4">{synth.summary}</p>}
+          {synth.summary && (
+            <div className="mb-4">{formatSummary(synth.summary)}</div>
+          )}
 
           {synth.key_concerns?.length ? (
             <div className="mb-3">
@@ -254,6 +245,38 @@ const ComprehensiveReport = ({ data }: Props) => {
               </ul>
             </div>
           ) : null}
+        </div>
+      )}
+
+      {/* Mode Reports -- auto-expanded */}
+      {data.mode_reports && Object.entries(data.mode_reports).map(([key, value]) => (
+        <div key={key} className="rounded-xl border border-border bg-card overflow-hidden">
+          <button
+            onClick={() => toggleMode(key)}
+            className="w-full flex items-center justify-between p-4 text-base font-medium hover:bg-secondary/50 transition-colors"
+          >
+            <span>{modeLabels[key] || key.replace(/_/g, " ")}</span>
+            {expandedModes[key] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          {expandedModes[key] && (
+            <div className="px-4 pb-4">
+              {renderSubReport(key, value)}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Mode Errors */}
+      {data.mode_errors && Object.keys(data.mode_errors).length > 0 && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+          <h4 className="text-sm font-semibold uppercase tracking-wide text-destructive mb-2">
+            Failed Modes
+          </h4>
+          {Object.entries(data.mode_errors).map(([key, err]) => (
+            <p key={key} className="text-sm text-muted-foreground">
+              {modeLabels[key] || key}: {err}
+            </p>
+          ))}
         </div>
       )}
 

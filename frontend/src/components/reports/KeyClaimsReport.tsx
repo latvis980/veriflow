@@ -161,7 +161,7 @@ const KeyClaimsReport = ({ data }: Props) => {
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
                         >
-                          View story on The True Story
+                          View full context on The True Story
                           <ExternalLink size={11} />
                         </a>
                       </div>

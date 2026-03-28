@@ -5,6 +5,13 @@ TTS Audit Builder
 Helper functions to build and save TTS audit trails from orchestrator data.
 Follows the same pattern as search_audit_builder.py.
 
+R2 folder structure (separate from search audits):
+  tts-audits/{pipeline_type}/{session_id}/tts_audit.json
+
+e.g.
+  tts-audits/web-search/abc123/tts_audit.json
+  tts-audits/key-claims/abc123/tts_audit.json
+
 Used by: WebSearchOrchestrator, KeyClaimsOrchestrator
 """
 
@@ -108,6 +115,7 @@ def build_claim_audit_from_evidence(
         audit.total_search_results = evidence.get("total_search_results", 0)
 
         # Evidence snippets -- the key data for human audit
+        # Each snippet carries source name, article headline (title), and text
         for et in evidence.get("evidence_texts", []):
             audit.evidence_snippets.append(TTSEvidenceSnippet(
                 source_name=et.get("source", "Unknown"),
@@ -244,13 +252,19 @@ async def upload_tts_audit_to_r2(
     pipeline_type: str = "web-search",
 ) -> Optional[str]:
     """
-    Upload TTS audit to Cloudflare R2.
+    Upload TTS audit to Cloudflare R2 under a dedicated tts-audits folder.
+
+    R2 path:
+        tts-audits/{pipeline_type}/{session_id}/tts_audit.json
+
+    This keeps TTS audits in their own top-level folder, separate from
+    search audits, so they are easy to browse and download independently.
 
     Args:
         tts_audit: The TTSSessionAudit to upload
         session_id: Session identifier
         r2_uploader: R2Uploader instance
-        pipeline_type: Type of pipeline for R2 folder structure
+        pipeline_type: "web-search", "key-claims", or "llm-output"
 
     Returns:
         R2 URL if successful, None otherwise
@@ -271,7 +285,8 @@ async def upload_tts_audit_to_r2(
             temp_path = f.name
 
         try:
-            r2_filename = f"{pipeline_type}-audits/{session_id}/tts_audit.json"
+            # Dedicated tts-audits folder at the R2 bucket root
+            r2_filename = f"tts-audits/{pipeline_type}/{session_id}/tts_audit.json"
 
             url = r2_uploader.upload_file(
                 file_path=temp_path,
