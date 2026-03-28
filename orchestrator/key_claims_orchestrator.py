@@ -339,7 +339,7 @@ class KeyClaimsOrchestrator:
 
                     if not self.tts_router:
                         raise RuntimeError("TTSRouter not initialized")
-                        
+
                     routing_decisions = await self.tts_router.route(
                         claims=claims_for_router,
                         content_language=content_location.language if content_location else "english",
@@ -484,6 +484,33 @@ class KeyClaimsOrchestrator:
                                     original_llm_score = tts_check_result.match_score
                                     original_llm_report = tts_check_result.report
 
+                                    # Guard: if LLM found the cluster irrelevant, fall through
+                                    # to web search rather than boosting a 0-score result.
+                                    # Threshold must match MIN_RELEVANCE in apply_tts_cluster_boost.
+                                    TTS_MIN_RELEVANCE = 0.30
+                                    if original_llm_score < TTS_MIN_RELEVANCE:
+                                        fact_logger.logger.info(
+                                            f"TTS cluster mismatch for {claim_id}: "
+                                            f"llm_score={original_llm_score:.2f} < {TTS_MIN_RELEVANCE}, "
+                                            f"cluster='{cluster_title[:60]}' -- falling through to web search"
+                                        )
+                                        ft_claim = next((c for c in claims if c.id == claim_id), None)
+                                        if ft_claim:
+                                            tts_session_audit.add_claim_audit(
+                                                build_failed_claim_audit(
+                                                    claim_id=claim_id,
+                                                    claim_statement=ft_claim.statement,
+                                                    routing_decision=routing_lookup.get(claim_id),
+                                                    evidence=evidence,
+                                                    reason=f"Cluster topic mismatch (llm_score={original_llm_score:.2f}): '{cluster_title[:60]}'",
+                                                )
+                                            )
+                                        job_manager.add_progress(
+                                            job_id,
+                                            f"TTS: {claim_id} cluster unrelated, routing to web search"
+                                        )
+                                        continue
+
                                     # Apply cluster-size boost
                                     from utils.tts_service import apply_tts_cluster_boost, build_tts_story_url
                                     adjusted_score, adjusted_report = apply_tts_cluster_boost(
@@ -531,7 +558,7 @@ class KeyClaimsOrchestrator:
                                         else "partially verified" if tts_check_result.match_score >= 0.7
                                         else "low confidence"
                                     )
-                                    
+
                                     job_manager.add_progress(
                                         job_id,
                                         f"TTS: {claim_id} {score_label} "

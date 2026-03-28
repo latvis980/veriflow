@@ -555,10 +555,25 @@ def apply_tts_cluster_boost(
     sources covering the same story is strong verification signal that
     the snippet text alone cannot capture.
 
+    IMPORTANT: The boost only amplifies an existing relevance signal.
+    If the LLM scored below MIN_RELEVANCE (0.30), the cluster was deemed
+    topically unrelated to the claim. In that case we do NOT boost --
+    a large cluster about the wrong topic is noise, not evidence.
+
     Returns:
         (adjusted_score, adjusted_report)
     """
+    MIN_RELEVANCE = 0.30  # LLM must find at least weak relevance before boost applies
+
     original_score = llm_score
+
+    # Guard: if the LLM found the cluster irrelevant, do not boost
+    if llm_score < MIN_RELEVANCE:
+        fact_logger.logger.info(
+            f"TTS cluster boost skipped: llm_score={llm_score:.2f} < {MIN_RELEVANCE} "
+            f"(cluster '{cluster_title[:50]}' deemed irrelevant)"
+        )
+        return llm_score, llm_report
 
     # Cluster-size floor: large clusters guarantee a minimum score
     if cluster_size >= 20:

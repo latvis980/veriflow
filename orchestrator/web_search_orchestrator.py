@@ -404,6 +404,33 @@ class WebSearchOrchestrator:
                                     original_llm_score = tts_check_result.match_score
                                     original_llm_report = tts_check_result.report
 
+                                    # Guard: if LLM found the cluster irrelevant, fall through
+                                    # to web search rather than boosting a 0-score result.
+                                    # Threshold must match MIN_RELEVANCE in apply_tts_cluster_boost.
+                                    TTS_MIN_RELEVANCE = 0.30
+                                    if original_llm_score < TTS_MIN_RELEVANCE:
+                                        fact_logger.logger.info(
+                                            f"TTS cluster mismatch for {fact_id}: "
+                                            f"llm_score={original_llm_score:.2f} < {TTS_MIN_RELEVANCE}, "
+                                            f"cluster='{cluster_title[:60]}' -- falling through to web search"
+                                        )
+                                        ft_fact = next((f for f in facts if f.id == fact_id), None)
+                                        if ft_fact:
+                                            tts_session_audit.add_claim_audit(
+                                                build_failed_claim_audit(
+                                                    claim_id=fact_id,
+                                                    claim_statement=fact_obj.statement,
+                                                    routing_decision=routing_lookup.get(fact_id),
+                                                    evidence=evidence,
+                                                    reason=f"Cluster topic mismatch (llm_score={original_llm_score:.2f}): '{cluster_title[:60]}'",
+                                                )
+                                            )
+                                        job_manager.add_progress(
+                                            job_id,
+                                            f"TTS: {fact_id} cluster unrelated, routing to web search"
+                                        )
+                                        continue
+
                                     # Apply cluster-size boost
                                     from utils.tts_service import apply_tts_cluster_boost, build_tts_story_url
                                     adjusted_score, adjusted_report = apply_tts_cluster_boost(
