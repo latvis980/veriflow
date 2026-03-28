@@ -383,7 +383,7 @@ class KeyClaimsOrchestrator:
                                     query=decision.tts_query,
                                     edition=decision.tts_edition or "en",
                                     min_cluster_size=3,
-                                    max_evidence_articles=5,
+                                    max_evidence_articles=10,
                                 )
                                 return (decision.claim_id, evidence)
                             except Exception as e:

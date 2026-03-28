@@ -441,7 +441,7 @@ class TTSService:
         query: str,
         edition: str = "en",
         min_cluster_size: int = 3,
-        max_evidence_articles: int = 5,
+        max_evidence_articles: int = 10,
     ) -> Optional[Dict[str, Any]]:
         """
         High-level method: search TTS for a claim and return structured evidence.
@@ -476,6 +476,7 @@ class TTSService:
         evidence_texts = [
             {
                 "source": best.source_title,
+                "title": best.clean_title,
                 "text": best.clean_text,
                 "url": best.url,
             }
