@@ -249,14 +249,26 @@ const BiasReport = ({ data }: Props) => {
             {a?.final_assessment && <p className="text-base leading-relaxed">{a.final_assessment}</p>}
 
             {/* Publication bias context */}
-            {a?.publication_bias_context && (
-              <div className="rounded-lg bg-secondary/60 p-3">
-                <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-1">
-                  Publication Context
-                </h4>
-                <p className="text-sm text-muted-foreground leading-relaxed">{a.publication_bias_context}</p>
-              </div>
-            )}
+            {a?.publication_bias_context && (() => {
+              // Strip legacy header lines so only the clean sentence is shown.
+              const cleaned = a.publication_bias_context
+                .split("\n")
+                .map((line: string) => line.trim())
+                .filter((line: string) =>
+                  line.length > 0 &&
+                  !/^(PUBLICATION CONTEXT|PUBLICATION:|MEDIA BIAS|MBFC|NOTE:|={3,})/i.test(line)
+                )
+                .join(" ");
+              if (!cleaned) return null;
+              return (
+                <div className="rounded-lg bg-secondary/60 p-3">
+                  <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                    Publication Context
+                  </h4>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{cleaned}</p>
+                </div>
+              );
+            })()}
 
             {/* Model comparison toggle */}
             {(a?.areas_of_agreement?.length || a?.areas_of_disagreement?.length ||

@@ -19,9 +19,12 @@ from utils.langsmith_config import langsmith_config
 from utils.file_manager import FileManager
 from utils.r2_uploader import R2Uploader
 
-# NEW: Import credibility context builder
+# Import credibility context builders
 try:
-    from utils.credibility_context import build_bias_analysis_context
+    from utils.credibility_context import (
+        build_bias_analysis_context,
+        build_bias_analysis_context_async,
+    )
 except ImportError:
     # Fallback if module not yet added
     def build_bias_analysis_context(source_credibility=None, publication_name=None):
@@ -35,6 +38,9 @@ except ImportError:
         if source_credibility.get('factual_reporting'):
             parts.append(f"Factual: {source_credibility['factual_reporting']}")
         return "\n".join(parts)
+
+    async def build_bias_analysis_context_async(source_credibility=None, publication_name=None):
+        return build_bias_analysis_context(source_credibility, publication_name)
 
 
 class BiasCheckOrchestrator:
@@ -107,21 +113,22 @@ class BiasCheckOrchestrator:
         if job_manager.is_cancelled(job_id):
             raise Exception("Job cancelled by user")
 
-    def _build_publication_context_from_credibility(
+    async def _build_publication_context_from_credibility(
         self, 
         source_credibility: Dict[str, Any]
     ) -> str:
         """
         Build publication context string from pre-fetched credibility data.
-        This is used when we already have credibility from the article fetch.
+        Uses Claude Haiku to summarize raw MBFC fields into a clean sentence.
+        Falls back to raw fields if the LLM call fails.
 
         Args:
             source_credibility: Dict with tier, bias_rating, factual_reporting, etc.
 
         Returns:
-            Formatted context string for bias analysis prompts
+            Human-readable context string for bias analysis prompts
         """
-        return build_bias_analysis_context(
+        return await build_bias_analysis_context_async(
             source_credibility=source_credibility,
             publication_name=source_credibility.get('publication_name')
         )
@@ -238,8 +245,8 @@ class BiasCheckOrchestrator:
                     }
                 )
 
-                # Build context from pre-fetched data
-                mbfc_context = self._build_publication_context_from_credibility(source_credibility)
+                # Build context from pre-fetched data (async: calls Claude Haiku to summarize)
+                mbfc_context = await self._build_publication_context_from_credibility(source_credibility)
                 publication_profile_data = self._convert_credibility_to_profile_data(source_credibility)
                 resolved_publication_name = source_credibility.get('publication_name', publication_name)
 

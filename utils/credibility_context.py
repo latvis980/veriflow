@@ -7,6 +7,92 @@ This allows the AI to consider source reliability when analyzing content.
 from typing import Optional, Dict, Any
 
 
+async def build_bias_analysis_context_async(
+    source_credibility: Optional[Dict[str, Any]] = None,
+    publication_name: Optional[str] = None
+) -> str:
+    """
+    Async version of build_bias_analysis_context.
+    Calls Claude Haiku to turn raw MBFC fields into a clean,
+    human-readable publication profile sentence.
+
+    Falls back to the raw sync version if the LLM call fails.
+
+    Args:
+        source_credibility: Dict with MBFC data (bias_rating, factual_reporting, etc.)
+        publication_name: Fallback publication name
+
+    Returns:
+        Clean formatted context string
+    """
+    if not source_credibility:
+        if publication_name:
+            return f"\nPUBLICATION: {publication_name}\n(No prior bias data available)"
+        return ""
+
+    pub_name = source_credibility.get('publication_name') or publication_name
+
+    # Collect the fields we want to summarize
+    raw_fields = {}
+    bias = source_credibility.get('bias_rating')
+    factual = source_credibility.get('factual_reporting')
+    rating = source_credibility.get('rating') or source_credibility.get('credibility_rating')
+    special_tags = source_credibility.get('special_tags', [])
+
+    if bias:
+        raw_fields['bias_rating'] = bias
+    if factual:
+        raw_fields['factual_reporting'] = factual
+    if rating:
+        raw_fields['credibility_rating'] = rating
+    if special_tags:
+        raw_fields['special_tags'] = special_tags
+
+    # If we have nothing useful, skip LLM and return minimal context
+    if not pub_name or not raw_fields:
+        return build_bias_analysis_context(source_credibility, publication_name)
+
+    try:
+        from langchain_anthropic import ChatAnthropic
+        from prompts.credibility_context_prompts import (
+            PUBLICATION_SUMMARY_SYSTEM,
+            PUBLICATION_SUMMARY_USER,
+        )
+        from langchain.prompts import ChatPromptTemplate
+
+        llm = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature=0, max_tokens=200)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", PUBLICATION_SUMMARY_SYSTEM),
+            ("user", PUBLICATION_SUMMARY_USER),
+        ])
+
+        chain = prompt | llm
+
+        response = await chain.ainvoke({
+            "publication_name": pub_name,
+            "raw_data": str(raw_fields),
+        })
+
+        summary = response.content.strip()
+
+        if summary:
+            return f"\nPUBLICATION CONTEXT:\n{summary}"
+
+    except Exception as e:
+        # Non-fatal: log and fall back to raw context
+        try:
+            from utils.logger import fact_logger
+            fact_logger.logger.warning(
+                f"Publication context summarization failed for '{pub_name}': {e} — using raw fallback"
+            )
+        except Exception:
+            pass
+
+    # Fallback: raw MBFC fields
+    return build_bias_analysis_context(source_credibility, publication_name)
+
+
 def build_credibility_context(
     source_credibility: Optional[Dict[str, Any]] = None,
     publication_name: Optional[str] = None,
